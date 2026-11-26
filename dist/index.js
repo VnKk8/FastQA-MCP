@@ -8,7 +8,7 @@ import { saveFlow, loadFlow, listFlows, runSuite, exportFlow, FLOW_DIR } from '.
 import { auditA11y, renderA11y } from './a11y.js';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
-const VERSION = '0.3.0';
+const VERSION = '0.3.1';
 const session = new Session();
 const text = (t) => ({ content: [{ type: 'text', text: t }] });
 const stripHash = (u) => u.split('#')[0];

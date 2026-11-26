@@ -9,7 +9,7 @@ import { auditA11y, renderA11y } from './a11y.js';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 
-const VERSION = '0.3.0';
+const VERSION = '0.3.1';
 const session = new Session();
 const text = (t: string) => ({ content: [{ type: 'text' as const, text: t }] });
 const stripHash = (u: string) => u.split('#')[0];
