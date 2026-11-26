@@ -6,10 +6,11 @@ import { Session } from './session.js';
 import { runStep, bind, STEP_KINDS } from './runner.js';
 import { saveFlow, loadFlow, listFlows, runSuite, exportFlow, FLOW_DIR } from './flows.js';
 import { auditA11y, renderA11y } from './a11y.js';
-import { promises as fs } from 'node:fs';
+import { promises as fs, readFileSync } from 'node:fs';
 import path from 'node:path';
 
-const VERSION = '0.3.1';
+// Single source of truth: package.json sits one level above dist/ in the repo and in the npm package.
+const VERSION: string = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version;
 const session = new Session();
 const text = (t: string) => ({ content: [{ type: 'text' as const, text: t }] });
 const stripHash = (u: string) => u.split('#')[0];

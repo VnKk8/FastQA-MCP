@@ -1,28 +1,89 @@
-name: Publish to npm
+name: Release
 
-# Runs when a GitHub release is published. Uses npm trusted publishing (OIDC):
-# no npm token is stored in GitHub. Set it up once on npmjs.com under
-# fastqa-mcp -> Settings -> Trusted publishing (workflow filename: publish.yml).
+# Publishes fastqa-mcp to npm, then commits + tags the version and creates a GitHub release.
+#
+# Two ways to start it:
+#   1. Manually: Actions -> Release -> Run workflow, then pick patch / minor / major
+#      (or type an exact version such as 1.0.0).
+#   2. Merging a pull request into main that has one of the labels
+#      release:patch, release:minor or release:major. Merged PRs without one of
+#      these labels publish nothing.
+#
+# npm side: uses trusted publishing (OIDC), so no npm token is stored in GitHub.
+# Set it up once on npmjs.com: fastqa-mcp -> Settings -> Trusted publishing ->
+# GitHub Actions, user VnKk8, repository FastQA-MCP, workflow publish.yml,
+# and allow the "npm publish" action.
 
 on:
-  release:
-    types: [published]
-
-permissions:
-  id-token: write # required for npm trusted publishing (OIDC)
-  contents: read
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: Version bump
+        type: choice
+        options: [patch, minor, major]
+        default: patch
+      version:
+        description: Or an exact version instead, e.g. 1.0.0 (leave empty to use the bump above)
+        type: string
+        required: false
+  push:
+    branches: [main]
 
 concurrency:
-  group: npm-publish
+  group: release
   cancel-in-progress: false
 
 jobs:
-  publish:
-    runs-on: ubuntu-latest
+  plan:
+    name: Decide the version
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      release: ${{ steps.plan.outputs.release }}
+    steps:
+      - id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
+          BUMP: ${{ inputs.bump }}
+          EXACT: ${{ inputs.version }}
+          SHA: ${{ github.sha }}
+        run: |
+          if [ "$EVENT" = "workflow_dispatch" ]; then
+            if [ -n "$EXACT" ]; then RELEASE="${EXACT#v}"; else RELEASE="$BUMP"; fi
+          else
+            LABELS=$(gh api "repos/$GITHUB_REPOSITORY/commits/$SHA/pulls" \
+              --jq '[.[] | select(.merged_at != null) | .labels[].name] | join(",")')
+            echo "Labels on the merged pull request: ${LABELS:-none}"
+            case ",$LABELS," in
+              *,release:major,*) RELEASE=major ;;
+              *,release:minor,*) RELEASE=minor ;;
+              *,release:patch,*) RELEASE=patch ;;
+              *) RELEASE="" ;;
+            esac
+          fi
+          if [ -z "$RELEASE" ]; then
+            echo "::notice::No release:patch, release:minor or release:major label on a merged pull request, so nothing is published."
+          else
+            echo "Release: $RELEASE"
+          fi
+          echo "release=$RELEASE" >> "$GITHUB_OUTPUT"
+
+  release:
+    name: Publish ${{ needs.plan.outputs.release }}
+    needs: plan
+    if: needs.plan.outputs.release != ''
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write # push the version commit and tag, create the GitHub release
+      id-token: write # npm trusted publishing (OIDC)
     steps:
       - uses: actions/checkout@v6
         with:
-          ref: ${{ github.event.release.tag_name }}
+          ref: main
+          fetch-depth: 0
       - uses: actions/setup-node@v6
         with:
           node-version: '24'
@@ -34,31 +95,54 @@ jobs:
           npm install -g npm@latest
           npm --version
 
-      - name: Check the release tag matches package.json
+      - name: Bump the version
+        id: version
         env:
-          TAG: ${{ github.event.release.tag_name }}
+          RELEASE: ${{ needs.plan.outputs.release }}
         run: |
-          VERSION="v$(node -p "require('./package.json').version")"
-          if [ "$TAG" != "$VERSION" ]; then
-            echo "::error::Release tag $TAG does not match package.json version $VERSION. Bump the version, push, then tag the release with $VERSION."
+          npm version "$RELEASE" --no-git-tag-version
+          VERSION="$(node -p "require('./package.json').version")"
+          if git rev-parse -q --verify "refs/tags/v$VERSION" >/dev/null; then
+            echo "::error::Tag v$VERSION already exists. Choose a higher version."
+            exit 1
+          fi
+          if npm view "fastqa-mcp@$VERSION" version >/dev/null 2>&1; then
+            echo "::error::fastqa-mcp@$VERSION is already on npm. Choose a higher version."
+            exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Releasing v$VERSION"
+
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - run: npm test # also rebuilds dist/
+
+      - name: Commit and tag the release
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add package.json package-lock.json dist
+          git commit -m "v$VERSION"
+          git tag -a "v$VERSION" -m "v$VERSION"
+
+      # Publish before pushing: if npm refuses, nothing has changed on GitHub and the run can simply be retried.
+      - run: npm publish
+
+      - name: Push the version commit and tag
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          if ! git push origin HEAD:main "v$VERSION"; then
+            echo "::error::v$VERSION is on npm, but pushing the version commit to main failed (main changed during the run, or it is protected). Bump package.json to $VERSION on main by hand and push tag v$VERSION."
             exit 1
           fi
 
-      - name: Skip if this version is already on npm
-        id: check
+      - name: Create the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
         run: |
-          NAME="$(node -p "require('./package.json').name")"
-          VERSION="$(node -p "require('./package.json').version")"
-          if npm view "$NAME@$VERSION" version >/dev/null 2>&1; then
-            echo "::notice::$NAME@$VERSION is already published; nothing to do."
-            echo "skip=true" >> "$GITHUB_OUTPUT"
-          fi
-
-      - if: steps.check.outputs.skip != 'true'
-        run: npm ci
-      - if: steps.check.outputs.skip != 'true'
-        run: npx playwright install --with-deps chromium
-      - if: steps.check.outputs.skip != 'true'
-        run: npm test
-      - if: steps.check.outputs.skip != 'true'
-        run: npm publish
+          gh release create "v$VERSION" --title "v$VERSION" --generate-notes \
+            --notes "npm: https://www.npmjs.com/package/fastqa-mcp/v/$VERSION"

@@ -12,7 +12,8 @@ permissions:
 jobs:
   test:
     name: Test (Node ${{ matrix.node }})
-    runs-on: ubuntu-latest
+    # Pinned: Playwright's --with-deps only knows the system packages of Ubuntu releases it supports.
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
