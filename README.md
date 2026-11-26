@@ -1,24 +1,25 @@
 # FastQA
 
-**An AI assistant that tests websites for you, quickly, and remembers how.**
+**An MCP server with a QA mindset that lets an LLM drive and test web UI applications.**
 
-You describe a test in plain words. The AI clicks through the website, checks the results and tells you what broke. When a test passes, FastQA saves it. After that, it reruns by itself in about a second, with no AI needed.
+FastQA connects any MCP client (Claude Code, OpenCode and others) to a real browser. The LLM clicks, types and reads the page the way a tester would, and FastQA checks every step: it asserts on text, URLs, field values and accessibility. It also **records every network call with its method, URL and status code**, so a `500 POST /api/claim` is caught even when the UI hides it.
+
+When a test passes, FastQA saves it as a flow. Saved flows replay in about a second with no LLM calls, from the MCP client or from the command line in CI.
 
 ---
 
-## The idea in one picture
+## How it fits together
 
-Think of a new team member who is very smart but has never used a computer.
-
-| Part | In real life it's... | In FastQA |
+| Part | Role | Who does it |
 |---|---|---|
-| 🧠 The brain | The tester who decides what to do next | The AI (Claude, or whatever model OpenCode uses) |
-| ✋ The hands and eyes | Clicking, typing, reading the screen | **FastQA** |
-| 💻 The computer | The browser | Chrome, running invisibly in the background |
+| 🧠 The brain | Decides what to test and what to do next | The LLM (Claude, or whatever model OpenCode uses) |
+| ✋ The hands and eyes | Clicks, types, reads the page, checks results | **FastQA** (the MCP server) |
+| 📡 The network log | Records each call: method, URL, status code | **FastQA** |
+| 💻 The browser | Runs the web app under test | Chrome, headless by default |
 
-**Why it's fast:** Other tools make the AI do one click, then stop and look, then do the next click, then look again. Each "look" takes the AI about 3 seconds to think.
+**Why it's fast:** Most browser MCP servers make the LLM do one click, stop and look, then do the next click and look again. Each "look" costs the LLM about 3 seconds of thinking.
 
-FastQA gives the AI a **checklist** instead: *type the email, type the password, click Log in, check the welcome message*. The whole list runs in one go. The AI only hears back **what changed** on the screen, not the whole page again.
+FastQA lets the LLM send a **batch of steps** instead: *type the email, type the password, click Log in, check the welcome message, check that `POST /api/login` returned 200*. The whole batch runs in one go. The LLM only hears back **what changed** on the page, plus any failed calls or errors, not the whole page again.
 
 The result is that the same test takes **about 8 seconds instead of about 33**. Once it's saved, it takes **about 1.5 seconds**.
 

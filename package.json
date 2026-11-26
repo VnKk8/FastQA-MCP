@@ -2,6 +2,14 @@
   "name": "fastqa-mcp",
   "version": "0.3.0",
   "description": "Fast browser control for QA agents. One MCP server for Claude Code, OpenCode and any MCP client: batched actions, compact diffs, built-in assertions, record and replay with zero LLM calls.",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/VnKk8/FastQA-MCP.git"
+  },
+  "homepage": "https://github.com/VnKk8/FastQA-MCP#readme",
+  "bugs": {
+    "url": "https://github.com/VnKk8/FastQA-MCP/issues"
+  },
   "type": "module",
   "bin": {
     "fastqa-mcp": "dist/index.js"
@@ -14,6 +22,7 @@
   "scripts": {
     "build": "tsc -p .",
     "start": "node dist/index.js",
+    "prepublishOnly": "npm run build",
     "demo": "node bench/demo-server.mjs",
     "test": "npm run build && node bench/e2e.mjs && node bench/export-check.mjs && node bench/qa-features.mjs",
     "bench": "npm run build && node bench/bench.mjs"

@@ -79,10 +79,10 @@ await call('close', {});
 await c.close();
 
 // CLI for Jenkins: no model, exit code 1 on failure
-const cli = await promisify(exec)(`node ${path.resolve('dist/index.js')} run login --data=users`, { env: { ...process.env, FASTQA_DIR: dir } }).catch((e) => e);
+const cli = await promisify(exec)(`node "${path.resolve('dist/index.js')}" run login --data=users`, { env: { ...process.env, FASTQA_DIR: dir } }).catch((e) => e);
 const cliOk = cli.code === 1 && /2\/3 passed/.test(cli.stdout) && existsSync(path.join(dir, 'reports', 'latest.junit.xml'));
 console.log(`\n=== ${cliOk ? 'OK  ' : 'FAIL'} CLI exit=${cli.code}\n${cli.stdout}`); if (!cliOk) fails++;
-writeFileSync('/tmp/fastqa-sample-report.html', html);
+writeFileSync(path.join(tmpdir(), 'fastqa-sample-report.html'), html);
 srv.close();
 console.log(fails ? `\n${fails} FAILED` : '\nALL QA FEATURE CHECKS PASSED');
 process.exit(fails ? 1 : 0);

@@ -29,7 +29,7 @@ await call('flow', { action: 'export', name: 'full' });
 await call('close', {}); await c.close();
 writeFileSync(path.join(dir, 'playwright.config.mjs'), `export default { testDir: './tests', reporter: 'line', use: { launchOptions: { executablePath: ${JSON.stringify(process.env.FASTQA_CHROME || '')} || undefined } } };`);
 try {
-  const { stdout: out } = await promisify(exec)(`npx playwright test -c ${dir}/playwright.config.mjs`, { cwd: dir, env: { ...process.env, FASTQA_VAR_password: 'secret123', NODE_PATH: path.resolve('node_modules') } });
+  const { stdout: out } = await promisify(exec)(`node "${path.resolve('node_modules/@playwright/test/cli.js')}" test -c "${dir}/playwright.config.mjs"`, { cwd: dir, env: { ...process.env, FASTQA_VAR_password: 'secret123', NODE_PATH: path.resolve('node_modules') } });
   console.log(out.trim().split('\n').slice(-3).join('\n'));
 } catch (e) { console.log('EXPORTED SPEC FAILED\n' + e.stdout + e.stderr); process.exitCode = 1; }
 srv.close();
