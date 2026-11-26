@@ -35,7 +35,7 @@ await call('open', { url: base + '/login' }, ['textbox "Email"', 'button "Log in
 
 // wrong password -> error alert shows up in the diff
 await call('act', { steps: [
-  { do: 'fill', target: 'Email', value: 'ivan@test.bg' },
+  { do: 'fill', target: 'Email', value: 'john@example.com' },
   { do: 'fill', target: 'Password', value: 'nope' },
   { do: 'click', target: 'Log in' },
   { do: 'expect_text', value: 'Invalid email or password' },
@@ -44,59 +44,59 @@ await call('act', { steps: [
 // secret from env, never typed by the model; whole journey in one call
 await call('flow', { action: 'start' }, ['Recording']);
 await call('act', { steps: [
-  { do: 'fill', target: 'Email', value: 'ivan@test.bg' },
+  { do: 'fill', target: 'Email', value: 'john@example.com' },
   { do: 'fill', target: 'Password', value: '{{password}}' },
   { do: 'click', target: 'Log in' },
-  { do: 'expect_url', value: '/lobby' },
+  { do: 'expect_url', value: '/account' },
   { do: 'expect_text', value: 'Welcome back' },
-  { do: 'expect_disabled', target: 'Claim Welcome bonus' },
-  { do: 'check', target: 'css=#card-welcome .tc' },
-  { do: 'click', target: 'Claim Welcome bonus' },
-  { do: 'expect_text', value: 'Bonus activated: 200.00 EUR' },
-  { do: 'select', target: 'Currency', value: 'BGN' },
-  { do: 'expect_value', target: 'Currency', value: 'BGN' },
-] }, ['PASSED 11/11', 'navigated, new page', 'Bonus activated', /^(?![\s\S]*secret123)/]);
-await call('flow', { action: 'save', name: 'claim-welcome-bonus' }, ['Saved']);
+  { do: 'expect_disabled', target: 'Add Blue T-shirt to cart' },
+  { do: 'check', target: 'css=#card-tshirt .tc' },
+  { do: 'click', target: 'Add Blue T-shirt to cart' },
+  { do: 'expect_text', value: 'Added to cart: Blue T-shirt' },
+  { do: 'select', target: 'Currency', value: 'GBP' },
+  { do: 'expect_value', target: 'Currency', value: 'GBP' },
+] }, ['PASSED 11/11', 'navigated, new page', 'Added to cart', /^(?![\s\S]*secret123)/]);
+await call('flow', { action: 'save', name: 'add-to-cart' }, ['Saved']);
 
-// planted bug: free spins claim returns 500
+// planted bug: adding the hoodie returns 500
 await call('act', { steps: [
-  { do: 'check', target: 'css=#card-spins .tc' },
-  { do: 'click', target: 'Claim Free spins' },
-  { do: 'expect_text', value: 'Bonus activated: 50', timeout: 2000 },
+  { do: 'check', target: 'css=#card-hoodie .tc' },
+  { do: 'click', target: 'Add Grey hoodie to cart' },
+  { do: 'expect_text', value: 'Added to cart: Grey hoodie', timeout: 2000 },
 ] }, ['FAILED at step 3/3', '--- page now ---', 'failed request']);
-await call('evidence', {}, ['500 POST', 'claim failed']);
+await call('evidence', {}, ['500 POST', 'add to cart failed']);
 
 // stale ref / unknown target is a clean failure, not a crash
 await call('act', { steps: [{ do: 'click', target: 'Nonexistent button', timeout: 500 }] }, ['FAILED at step 1/1', 'No visible element']);
 
-await call('snapshot', { mode: 'full', root: '#card-welcome' }, ['Welcome bonus']);
+await call('snapshot', { mode: 'full', root: '#card-tshirt' }, ['Blue T-shirt']);
 await call('screenshot', {}, ['image']);
 
 // replay with no model + export
-await call('flow', { action: 'run', name: 'claim-welcome-bonus' }, ['1/1 flows passed']);
-await call('flow', { action: 'run', name: 'claim-welcome-bonus', vars: { password: 'wrong' } }, ['0/1 flows passed', 'FAIL']);
-await call('flow', { action: 'export', name: 'claim-welcome-bonus' }, ['getByLabel', 'process.env.FASTQA_VAR_password', 'toHaveURL(new RegExp("/lobby"))']);
+await call('flow', { action: 'run', name: 'add-to-cart' }, ['1/1 flows passed']);
+await call('flow', { action: 'run', name: 'add-to-cart', vars: { password: 'wrong' } }, ['0/1 flows passed', 'FAIL']);
+await call('flow', { action: 'export', name: 'add-to-cart' }, ['getByLabel', 'process.env.FASTQA_VAR_password', 'toHaveURL(new RegExp("/account"))']);
 // ---------- shadow DOM + iframes (cross-origin, nested) ----------
-await call('open', { url: base + '/cashier', fresh: true }, [
-  'textbox "Promo code"', 'button "Apply code"',            // inside open shadow root
+await call('open', { url: base + '/checkout', fresh: true }, [
+  'textbox "Coupon code"', 'button "Apply coupon"',            // inside open shadow root
   'frame "Payment"', '  e', 'textbox "Card holder"',        // cross-origin iframe block
   'textbox "Card number"',                                  // shadow root inside the iframe
 ]);
 await call('act', { steps: [
-  { do: 'fill', target: 'Promo code', value: 'WELCOME50' },
-  { do: 'click', target: 'Apply code' },
-  { do: 'expect_text', value: 'Promo applied: +50 free spins' },
-  { do: 'fill', target: 'Card holder', value: 'Ivan Test' },
+  { do: 'fill', target: 'Coupon code', value: 'SAVE10' },
+  { do: 'click', target: 'Apply coupon' },
+  { do: 'expect_text', value: 'Coupon applied: 10% off' },
+  { do: 'fill', target: 'Card holder', value: 'John Smith' },
   { do: 'fill', target: 'Card number', value: '4111111111111111' },
-  { do: 'select', target: 'Amount', value: '50 EUR' },
-  { do: 'click', target: 'Deposit', frame: 'Payment' },
+  { do: 'select', target: 'Shipping', value: 'Express' },
+  { do: 'click', target: 'Pay now', frame: 'Payment' },
   { do: 'click', target: 'Confirm payment' },                // nested 3DS iframe that appeared mid-batch
-  { do: 'expect_text', value: 'Deposit successful: 50 EUR' },
-] }, ['PASSED 9/9', '+ status "Deposit successful: 50 EUR"', 'frame "3-D Secure"']);
-await call('flow', { action: 'save', name: 'cashier-deposit' }, ['Saved']);
-await call('flow', { action: 'show', name: 'cashier-deposit' }, ['Card number']);
-await call('flow', { action: 'run', name: 'cashier-deposit' }, ['1/1 flows passed']);
-await call('flow', { action: 'export', name: 'cashier-deposit' }, ['frameLocator("iframe[title=\\"Payment\\"]").frameLocator("iframe[title=\\"3-D Secure\\"]")', 'getByLabel("Card number"']);
+  { do: 'expect_text', value: 'Thank you for your order: Express shipping' },
+] }, ['PASSED 9/9', '+ status "Thank you for your order: Express shipping"', 'frame "3-D Secure"']);
+await call('flow', { action: 'save', name: 'checkout' }, ['Saved']);
+await call('flow', { action: 'show', name: 'checkout' }, ['Card number']);
+await call('flow', { action: 'run', name: 'checkout' }, ['1/1 flows passed']);
+await call('flow', { action: 'export', name: 'checkout' }, ['frameLocator("iframe[title=\\"Payment\\"]").frameLocator("iframe[title=\\"3-D Secure\\"]")', 'getByLabel("Card number"']);
 await call('snapshot', { mode: 'full' }, ['frame "3-D Secure"', 'Bank verification']);
 
 await call('close', {});

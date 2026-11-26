@@ -37,16 +37,16 @@ const ref = (snap, re) => { const m = snap.match(re); if (!m) throw new Error('r
 let s = await pw.call('browser_navigate', { url: base + '/login' });
 s = await pw.call('browser_snapshot', {});
 await pw.call('browser_fill_form', { fields: [
-  { name: 'Email', type: 'textbox', target: ref(s, /textbox "Email"[^\n]*\[ref=([a-z0-9]+)\]/), value: 'ivan@test.bg' },
+  { name: 'Email', type: 'textbox', target: ref(s, /textbox "Email"[^\n]*\[ref=([a-z0-9]+)\]/), value: 'john@example.com' },
   { name: 'Password', type: 'textbox', target: ref(s, /textbox "Password"[^\n]*\[ref=([a-z0-9]+)\]/), value: 'secret123' },
 ] });
 await pw.call('browser_click', { element: 'Log in', target: ref(s, /button "Log in"[^\n]*\[ref=([a-z0-9]+)\]/) });
 await pw.call('browser_wait_for', { text: 'Welcome back' });
 s = await pw.call('browser_snapshot', {});
-await pw.call('browser_click', { element: 'terms checkbox', target: ref(s, /checkbox "I accept the bonus terms"[^\n]*\[ref=([a-z0-9]+)\]/) });
-await pw.call('browser_click', { element: 'Claim Welcome bonus', target: ref(s, /button "Claim Welcome bonus"[^\n]*\[ref=([a-z0-9]+)\]/) });
-await pw.call('browser_wait_for', { text: 'Bonus activated: 200.00 EUR' });
-await pw.call('browser_select_option', { element: 'Currency', target: ref(s, /combobox "Currency"[^\n]*\[ref=([a-z0-9]+)\]/), values: ['BGN'] });
+await pw.call('browser_click', { element: 'size and colour checkbox', target: ref(s, /checkbox "I have checked the size and colour"[^\n]*\[ref=([a-z0-9]+)\]/) });
+await pw.call('browser_click', { element: 'Add Blue T-shirt to cart', target: ref(s, /button "Add Blue T-shirt to cart"[^\n]*\[ref=([a-z0-9]+)\]/) });
+await pw.call('browser_wait_for', { text: 'Added to cart: Blue T-shirt' });
+await pw.call('browser_select_option', { element: 'Currency', target: ref(s, /combobox "Currency"[^\n]*\[ref=([a-z0-9]+)\]/), values: ['GBP'] });
 await pw.call('browser_close', {}).catch(() => {});
 await pw.c.close();
 
@@ -54,15 +54,15 @@ await pw.c.close();
 const fq = await connect('node', [path.resolve('dist/index.js')], { FASTQA_VAR_password: 'secret123' });
 await fq.call('open', { url: base + '/login' });
 const out = await fq.call('act', { steps: [
-  { do: 'fill', target: 'Email', value: 'ivan@test.bg' },
+  { do: 'fill', target: 'Email', value: 'john@example.com' },
   { do: 'fill', target: 'Password', value: '{{password}}' },
   { do: 'click', target: 'Log in' },
   { do: 'expect_text', value: 'Welcome back' },
-  { do: 'check', target: 'css=#card-welcome .tc' },
-  { do: 'click', target: 'Claim Welcome bonus' },
-  { do: 'expect_text', value: 'Bonus activated: 200.00 EUR' },
-  { do: 'select', target: 'Currency', value: 'BGN' },
-  { do: 'expect_value', target: 'Currency', value: 'BGN' },
+  { do: 'check', target: 'css=#card-tshirt .tc' },
+  { do: 'click', target: 'Add Blue T-shirt to cart' },
+  { do: 'expect_text', value: 'Added to cart: Blue T-shirt' },
+  { do: 'select', target: 'Currency', value: 'GBP' },
+  { do: 'expect_value', target: 'Currency', value: 'GBP' },
 ] });
 if (!out.startsWith('PASSED')) throw new Error(out);
 const fqJourney = { ...fq.stats };

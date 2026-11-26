@@ -6,7 +6,7 @@ Fast browser control for QA agents. It's one MCP server that you plug into **Cla
 
 Playwright MCP is slow for QA because each click is a separate model turn, and the big snapshots get re-read on every turn. fastqa reduces both:
 
-| Same journey: login → fill a form → change a setting (bundled demo app) | @playwright/mcp 0.0.86 | fastqa |
+| Same journey: login → add to cart → switch currency (bundled demo shop) | @playwright/mcp 0.0.86 | fastqa |
 |---|---|---|
 | Model turns (tool calls) | 10 | **2** |
 | Tokens returned to the model | ~1,250 | **~300** (with 3 assertions included) |
@@ -22,7 +22,7 @@ Measured with `npm run bench` against the bundled demo app. Most of the time is 
 1. **Batched `act`.** You can fill a whole form, submit it and assert the result in one call, with up to 50 steps.
 2. **Targets resolve without a snapshot.** A target like `"Email"`, `"Log in"` or `"Add to cart"` resolves through label, placeholder, role+name or text. You can still use refs (`e12`), `#id`, `css=…` or `testid=…`.
 3. **Diffs instead of full snapshots.** After a batch, you only see `+ added` / `- removed` lines. You get a full snapshot when the page navigates or a step fails, so you can recover in the same turn.
-4. **Compact snapshots.** Each element takes one line, e.g. `e5 textbox "Email" ="ivan@test.bg" [required]`, with no YAML tree or wrapper divs.
+4. **Compact snapshots.** Each element takes one line, e.g. `e5 textbox "Email" ="john@example.com" [required]`, with no YAML tree or wrapper divs.
 5. **QA assertions built in.** The `expect_text`, `expect_url`, `expect_value`, `expect_visible`, `expect_hidden`, `expect_enabled`, `expect_disabled` and `expect_count` checks poll until they pass or time out.
 6. **Record and replay.** Every successful step is recorded. `flow save` stores the journey, and `flow run` replays it with no LLM at all. `flow export` writes a Playwright Test `.spec.ts`.
 7. **Evidence for free.** JS errors, console errors and HTTP responses of 400 and above are collected, and you're told about them after each act.
@@ -95,7 +95,7 @@ Use `/regex/` in expected values to match a regex. Steps time out after 5 s by d
 Example `act`:
 ```json
 { "steps": [
-  { "do": "fill",  "target": "Email", "value": "ivan@test.bg" },
+  { "do": "fill",  "target": "Email", "value": "john@example.com" },
   { "do": "fill",  "target": "Password", "value": "{{password}}" },
   { "do": "click", "target": "Log in" },
   { "do": "expect_url",  "value": "/dashboard" },

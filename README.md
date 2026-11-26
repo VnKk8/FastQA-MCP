@@ -92,7 +92,7 @@ claude mcp add fastqa -- node /full/path/to/fastqa-mcp/dist/index.js
 
 Type this to your AI, in normal words:
 
-> Open https://staging.example.com/login with FastQA. Log in as qa.user@test.com with password {{password}}. Add the "Blue T-shirt" to the cart, go to checkout and place the order. Check that it says "Thank you for your order" and that POST /api/orders returned 201. Make sure no server errors happened. If it passes, save it as "checkout".
+> Open https://staging.example.com/login with FastQA. Log in as qa.user@example.com with password {{password}}. Add the "Blue T-shirt" to the cart, go to checkout and place the order. Check that it says "Thank you for your order" and that POST /api/orders returned 201. Make sure no server errors happened. If it passes, save it as "checkout".
 
 That's it. The AI works out the steps and runs them in one go. It then tells you PASS or FAIL, with the reasons.
 
@@ -127,9 +127,9 @@ It finishes with a ✅ or ❌ for each test and tells you where the report was s
 Make a file `.fastqa/data/users.csv`:
 ```
 email,password
-ivan@test.bg,secret123
-maria@test.bg,secret123
-locked@test.bg,wrong
+john@example.com,secret123
+emma@example.com,secret123
+locked@example.com,wrong
 ```
 Then run:
 ```bash

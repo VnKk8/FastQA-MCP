@@ -12,7 +12,7 @@ const srv = await start();
 const base = `http://127.0.0.1:${srv.address().port}`;
 const dir = mkdtempSync(path.join(tmpdir(), 'fqq-'));
 const c = new Client({ name: 'qa', version: '0' });
-await c.connect(new StdioClientTransport({ command: 'node', args: [path.resolve('dist/index.js')], env: { ...process.env, FASTQA_DIR: dir, FASTQA_VAR_password: 'secret123', FASTQA_VAR_email: 'ivan@test.bg' } }));
+await c.connect(new StdioClientTransport({ command: 'node', args: [path.resolve('dist/index.js')], env: { ...process.env, FASTQA_DIR: dir, FASTQA_VAR_password: 'secret123', FASTQA_VAR_email: 'john@example.com' } }));
 let fails = 0;
 const call = async (name, args, expect = []) => {
   const r = await c.callTool({ name, arguments: args });
@@ -24,31 +24,31 @@ const call = async (name, args, expect = []) => {
 };
 
 const login = [
-  { do: 'fill', target: 'Email', value: 'ivan@test.bg' },
+  { do: 'fill', target: 'Email', value: 'john@example.com' },
   { do: 'fill', target: 'Password', value: '{{password}}' },
   { do: 'click', target: 'Log in' },
   { do: 'expect_request', target: 'POST /api/login', value: '200' },
-  { do: 'expect_url', value: '/lobby' },
+  { do: 'expect_url', value: '/account' },
 ];
 await call('open', { url: base + '/login' });
 await call('act', { steps: [...login,
-  { do: 'check', target: 'css=#card-welcome .tc' },
-  { do: 'click', target: 'Claim Welcome bonus' },
-  { do: 'expect_request', target: 'POST /api/claim/welcome', value: '2xx' },
-  { do: 'expect_text', value: 'Bonus activated' },
+  { do: 'check', target: 'css=#card-tshirt .tc' },
+  { do: 'click', target: 'Add Blue T-shirt to cart' },
+  { do: 'expect_request', target: 'POST /api/cart/tshirt', value: '2xx' },
+  { do: 'expect_text', value: 'Added to cart' },
   { do: 'expect_no_errors' },
-] }, ['PASSED 10/10', 'expect_request "POST /api/claim/welcome" "2xx"', 'expect_no_errors']);
+] }, ['PASSED 10/10', 'expect_request "POST /api/cart/tshirt" "2xx"', 'expect_no_errors']);
 
 // planted backend bug: the network assertion and the error guard both catch it
 await call('act', { steps: [
-  { do: 'check', target: 'css=#card-spins .tc' },
-  { do: 'click', target: 'Claim Free spins' },
-  { do: 'expect_request', target: 'POST /api/claim/spins', value: '2xx', timeout: 2000 },
+  { do: 'check', target: 'css=#card-hoodie .tc' },
+  { do: 'click', target: 'Add Grey hoodie to cart' },
+  { do: 'expect_request', target: 'POST /api/cart/hoodie', value: '2xx', timeout: 2000 },
 ] }, ['FAILED at step 3/3', 'status not 2xx: 500 POST', 'screenshot saved:']);
 await call('act', { steps: [
   { do: 'click', target: 'Retry' },
   { do: 'expect_no_errors' },
-] }, ['FAILED at step 2/2', 'http: 500 POST', 'console: claim failed 500']);
+] }, ['FAILED at step 2/2', 'http: 500 POST', 'console: add to cart failed 500']);
 
 // accessibility
 await call('audit', {}, ['image-alt', '[critical]']);
@@ -65,12 +65,12 @@ await call('act', { steps: [
   { do: 'fill', target: 'Email', value: '{{email}}' },
   { do: 'fill', target: 'Password', value: '{{password}}' },
   { do: 'click', target: 'Log in' },
-  { do: 'expect_url', value: '/lobby' },
+  { do: 'expect_url', value: '/account' },
 ] }, ['PASSED 4/4']);
 await call('flow', { action: 'save', name: 'login' }, ['Saved']);
 mkdirSync(path.join(dir, 'data'), { recursive: true });
-writeFileSync(path.join(dir, 'data', 'users.csv'), 'email,password\nivan@test.bg,secret123\nmaria@test.bg,secret123\nlocked@test.bg,wrong\n');
-const out = await call('flow', { action: 'run', name: 'login', dataset: 'users' }, ['2/3 flows passed', 'row 3: locked@test.bg', 'report:', 'junit:']);
+writeFileSync(path.join(dir, 'data', 'users.csv'), 'email,password\njohn@example.com,secret123\nemma@example.com,secret123\nlocked@example.com,wrong\n');
+const out = await call('flow', { action: 'run', name: 'login', dataset: 'users' }, ['2/3 flows passed', 'row 3: locked@example.com', 'report:', 'junit:']);
 const html = readFileSync(out.match(/report: (.+)/)[1].trim(), 'utf8');
 const junit = readFileSync(out.match(/junit: (.+)/)[1].trim(), 'utf8');
 const rep = html.includes('FAIL') && html.includes('data:image/jpeg') && junit.includes('failures="1"') && !html.includes('secret123');
