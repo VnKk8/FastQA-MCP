@@ -1,0 +1,43 @@
+{
+  "when": "2026-11-26T23:32:05.324Z",
+  "node": "v24.11.1",
+  "platform": "win32 x64",
+  "samples": 30,
+  "warmup": 3,
+  "toolCallsPerJourney": 2,
+  "toolCount": 8,
+  "schemaBytes": 5663,
+  "schemaTokensApprox": 1416,
+  "coldTotalMs": 2491.2,
+  "warm": {
+    "totalMs": {
+      "median": 1481.4,
+      "p95": 1513.4,
+      "min": 1464.9,
+      "max": 1632.7
+    },
+    "openMs": {
+      "median": 199.1,
+      "p95": 202.4,
+      "min": 183.1,
+      "max": 341.2
+    },
+    "actMs": {
+      "median": 1287.7,
+      "p95": 1310.8,
+      "min": 1266.7,
+      "max": 1312.6
+    }
+  },
+  "responseChars": {
+    "open": 287,
+    "act": 982
+  },
+  "replayMs": {
+    "median": 1395.8,
+    "p95": 1420.7,
+    "min": 1374.5,
+    "max": 1420.7
+  },
+  "serverRssKb": 114532
+}
