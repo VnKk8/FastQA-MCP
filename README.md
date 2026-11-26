@@ -2,7 +2,7 @@
 
 [![npm version](https://img.shields.io/npm/v/fastqa-mcp?logo=npm&cacheSeconds=3600)](https://www.npmjs.com/package/fastqa-mcp)
 [![npm downloads](https://img.shields.io/npm/dm/fastqa-mcp?logo=npm&cacheSeconds=3600)](https://www.npmjs.com/package/fastqa-mcp)
-[![QA friendly](https://img.shields.io/badge/QA-friendly_%E2%9C%93-2ea44f)](#what-it-can-check-for-you)
+[![QA friendly](https://img.shields.io/badge/QA-friendly-2ea44f)](#what-it-can-check-for-you)
 [![license: MIT](https://img.shields.io/npm/l/fastqa-mcp.svg)](LICENSE)
 
 **An MCP server with a QA mindset that lets an LLM drive and test web UI applications.**
