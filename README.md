@@ -1,7 +1,7 @@
 # FastQA
 
-[![npm version](https://img.shields.io/npm/v/fastqa-mcp.svg)](https://www.npmjs.com/package/fastqa-mcp)
-[![npm downloads](https://img.shields.io/npm/dm/fastqa-mcp.svg)](https://www.npmjs.com/package/fastqa-mcp)
+[![npm version](https://img.shields.io/npm/v/fastqa-mcp?logo=npm)](https://www.npmjs.com/package/fastqa-mcp)
+[![npm downloads](https://img.shields.io/npm/dm/fastqa-mcp?logo=npm)](https://www.npmjs.com/package/fastqa-mcp)
 [![CI](https://github.com/VnKk8/FastQA-MCP/actions/workflows/ci.yml/badge.svg)](https://github.com/VnKk8/FastQA-MCP/actions/workflows/ci.yml)
 [![license: MIT](https://img.shields.io/npm/l/fastqa-mcp.svg)](LICENSE)
 
