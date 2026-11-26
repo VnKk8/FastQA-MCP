@@ -35,21 +35,17 @@ Requires Node 20+. You need a browser, either one of:
 - `npx playwright install chromium`, or
 - an installed Google Chrome or Edge, which is picked up automatically.
 
-```bash
-git clone <this repo> fastqa-mcp && cd fastqa-mcp
-npm install && npm run build
-```
+FastQA is published on npm as `fastqa-mcp`, so MCP clients start it with `npx -y fastqa-mcp`. There is no separate install step.
 
 ### Claude Code
 ```bash
-claude mcp add fastqa -- node /abs/path/fastqa-mcp/dist/index.js
-# after publishing to npm/your registry:
 claude mcp add fastqa -- npx -y fastqa-mcp
 ```
 You can also commit a project-level `.mcp.json`:
 ```json
-{ "mcpServers": { "fastqa": { "command": "npx", "args": ["-y", "fastqa-mcp"], "env": { "FASTQA_VAR_password": "…" } } } }
+{ "mcpServers": { "fastqa": { "command": "npx", "args": ["-y", "fastqa-mcp"], "env": { "FASTQA_HEADED": "false" } } } }
 ```
+Keep secrets such as `FASTQA_VAR_password` out of committed files. Set them in your shell or CI instead.
 
 ### OpenCode (`opencode.json`)
 ```json
@@ -67,7 +63,14 @@ You can also commit a project-level `.mcp.json`:
 ```
 
 ### Any other MCP client
-Use stdio with the command `node dist/index.js`.
+Use stdio with the command `npx -y fastqa-mcp`.
+
+### From source
+```bash
+git clone https://github.com/VnKk8/FastQA-MCP.git && cd FastQA-MCP
+npm install && npm run build
+claude mcp add fastqa -- node /abs/path/FastQA-MCP/dist/index.js
+```
 
 ## Tools
 

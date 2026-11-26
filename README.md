@@ -53,38 +53,57 @@ It also handles the tricky parts of modern sites: **pop-in payment frames** (ifr
 
 ---
 
-## Setting it up (about 5 minutes, once)
+## Setting it up (about 2 minutes, once)
 
 **You need:** Node.js 20 or newer, plus Google Chrome. If you don't have Chrome, run `npx playwright install chromium`.
 
-**Step 1: get it ready**
-```bash
-cd fastqa-mcp
-npm install
-npm run build
-```
+There is nothing to download or build. `npx` fetches FastQA from npm the first time your AI tool starts it.
 
-**Step 2: connect it to your AI tool**
+**Step 1: connect it to your AI tool**
+
+*If you use Claude Code*, run this once:
+```bash
+claude mcp add fastqa -- npx -y fastqa-mcp
+```
 
 *If you use OpenCode*, add this to your `opencode.json`:
 ```json
 {
+  "$schema": "https://opencode.ai/config.json",
   "mcp": {
     "fastqa": {
       "type": "local",
-      "command": ["node", "/full/path/to/fastqa-mcp/dist/index.js"],
+      "command": ["npx", "-y", "fastqa-mcp"],
       "enabled": true
     }
   }
 }
 ```
 
-*If you use Claude Code*, run this once:
-```bash
-claude mcp add fastqa -- node /full/path/to/fastqa-mcp/dist/index.js
+*If you use another MCP client* (Cursor, Claude Desktop, VS Code and others), add this to its MCP config:
+```json
+{
+  "mcpServers": {
+    "fastqa": { "command": "npx", "args": ["-y", "fastqa-mcp"] }
+  }
+}
 ```
 
-**Step 3: restart your AI tool.** You should now see `fastqa` in its list of tools.
+**Step 2: restart your AI tool.** You should now see `fastqa` in its list of tools.
+
+To update later, restart your AI tool: `npx -y fastqa-mcp` uses the newest published version. If an old version keeps running, use `fastqa-mcp@latest` in the command once.
+
+<details>
+<summary>Running from source instead</summary>
+
+```bash
+git clone https://github.com/VnKk8/FastQA-MCP.git
+cd FastQA-MCP
+npm install
+npm run build
+claude mcp add fastqa -- node /full/path/to/FastQA-MCP/dist/index.js
+```
+</details>
 
 ---
 
