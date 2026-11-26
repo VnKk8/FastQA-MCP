@@ -1,0 +1,116 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "DemoShop API (test fixture for fastqa contract checks)",
+    "version": "1.0.0",
+    "description": "Describes the JSON endpoints of bench/demo-server.mjs. Status 202 of POST /api/orders and all 5xx responses are deliberately not documented."
+  },
+  "paths": {
+    "/api/orders": {
+      "post": {
+        "operationId": "createOrder",
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/OrderRequest" } } }
+        },
+        "responses": {
+          "200": {
+            "description": "Order accepted",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/OrderResult" } } }
+          },
+          "201": {
+            "description": "Order created",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/OrderResult" } } }
+          },
+          "422": {
+            "description": "Validation error",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
+          }
+        }
+      }
+    },
+    "/api/notifications": {
+      "post": {
+        "operationId": "notify",
+        "responses": {
+          "200": {
+            "description": "Notification queued",
+            "content": {
+              "application/json": {
+                "schema": { "type": "object", "required": ["queued"], "properties": { "queued": { "type": "boolean" } } }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/stock/v2": {
+      "get": {
+        "operationId": "getStock",
+        "responses": {
+          "200": {
+            "description": "Stock level",
+            "content": {
+              "application/json": {
+                "schema": { "type": "object", "required": ["stock"], "properties": { "stock": { "type": "integer", "minimum": 0 } } }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/prices": {
+      "get": {
+        "operationId": "getPrices",
+        "responses": {
+          "200": {
+            "description": "Price list revision",
+            "content": {
+              "application/json": {
+                "schema": { "type": "object", "required": ["n"], "properties": { "n": { "type": "integer" } } }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/poll": {
+      "get": {
+        "operationId": "poll",
+        "responses": {
+          "200": {
+            "description": "Heartbeat",
+            "content": {
+              "application/json": {
+                "schema": { "type": "object", "required": ["tick"], "properties": { "tick": { "type": "integer" } } }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "OrderRequest": {
+        "type": "object",
+        "required": ["product", "qty"],
+        "properties": { "product": { "type": "string" }, "qty": { "type": "integer", "minimum": 1 } }
+      },
+      "OrderResult": {
+        "type": "object",
+        "required": ["success", "orderId", "total"],
+        "properties": {
+          "success": { "type": "boolean" },
+          "orderId": { "type": "string" },
+          "total": { "type": "number" }
+        }
+      },
+      "Error": {
+        "type": "object",
+        "required": ["error"],
+        "properties": { "error": { "type": "string" } }
+      }
+    }
+  }
+}
