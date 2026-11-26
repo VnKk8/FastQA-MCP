@@ -9,13 +9,13 @@ Playwright MCP is slow for QA because each click is a separate model turn, and t
 | Same journey: login → add to cart → switch currency (bundled demo shop) | @playwright/mcp 0.0.86 | fastqa |
 |---|---|---|
 | Model turns (tool calls) | 10 | **2** |
-| Tokens returned to the model | ~1,250 | **~300** (with 3 assertions included) |
-| Tool definitions in the prompt, every turn | ~5,300 tokens (25 tools) | **~1,070 tokens (7 tools)** |
-| Browser-side time | 2.9 s | 1.9 s |
-| Estimated end-to-end at 3 s per model turn | ~33 s | **~8 s** |
-| Re-run later | needs the model again | **1.5 s, no model** (`flow run`) |
+| Tokens returned to the model | ~1,270 | **~310** (with 3 assertions included) |
+| Tool definitions in the prompt, every turn | ~5,300 tokens (25 tools) | **~1,420 tokens (8 tools)** |
+| Browser-side time | 3.1 s | 2.5 s |
+| Estimated end-to-end at 3 s per model turn | ~33 s | **~8.5 s** |
+| Re-run later | needs the model again | **1.4 s, no model** (`flow run`) |
 
-Measured with `npm run bench` against the bundled demo app. Most of the time is spent waiting on the model, so the main gain comes from needing fewer turns.
+Measured on fastqa-mcp 0.3.2 with `npm run bench` against the bundled demo shop. Most of the time is spent waiting on the model, so the main gain comes from needing fewer turns.
 
 ## Why it's faster
 
@@ -153,3 +153,13 @@ npm test     # build + end-to-end over real MCP stdio (incl. shadow DOM + nested
 npm run bench
 npm run demo # demo app on http://127.0.0.1:4321
 ```
+
+CI (`.github/workflows/ci.yml`) runs `npm test` on Node 20, 22 and 24 for every push and pull request. It also fails if the committed `dist/` doesn't match the source, so run `npm run build` and commit `dist/` with source changes.
+
+## Releasing
+Releases are automated by `.github/workflows/publish.yml`. Don't run `npm publish` by hand.
+
+- **Manually:** Actions → **Release** → **Run workflow**, then pick `patch`, `minor` or `major`, or type an exact version.
+- **On merge:** label a pull request `release:patch`, `release:minor` or `release:major` before merging it into `main`. Merged pull requests without one of these labels publish nothing.
+
+The workflow bumps the version in `package.json`, runs the tests, publishes to npm with trusted publishing (with a provenance attestation), then pushes a `vX.Y.Z` commit and tag and creates the GitHub release. The server reads its version from `package.json`, so nothing else needs changing. Add the new version's notes to `CHANGELOG.md`.

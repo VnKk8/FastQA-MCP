@@ -23,7 +23,7 @@ Or install it from npm to run saved tests from a terminal or CI:
 npm install -g fastqa-mcp
 ```
 
-Other MCP clients (OpenCode, Cursor, Claude Desktop, VS Code) are covered in [Setting it up](#setting-it-up-about-2-minutes-once).
+Other MCP clients (OpenCode, Cursor, Claude Desktop, VS Code) are covered in [Setting it up](#setting-it-up-about-2-minutes-once). See the [changelog](CHANGELOG.md) for what changed in each version.
 
 ---
 
