@@ -1,0 +1,46 @@
+{
+  "name": "fastqa-mcp",
+  "version": "0.3.0",
+  "description": "Fast browser control for QA agents. One MCP server for Claude Code, OpenCode and any MCP client: batched actions, compact diffs, built-in assertions, record and replay with zero LLM calls.",
+  "type": "module",
+  "bin": {
+    "fastqa-mcp": "dist/index.js"
+  },
+  "main": "dist/index.js",
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc -p .",
+    "start": "node dist/index.js",
+    "demo": "node bench/demo-server.mjs",
+    "test": "npm run build && node bench/e2e.mjs && node bench/export-check.mjs && node bench/qa-features.mjs",
+    "bench": "npm run build && node bench/bench.mjs"
+  },
+  "keywords": [
+    "mcp",
+    "qa",
+    "playwright",
+    "browser",
+    "claude-code",
+    "opencode",
+    "testing"
+  ],
+  "license": "MIT",
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.2",
+    "axe-core": "^4.14.1",
+    "playwright": "1.57.0",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@playwright/mcp": "^0.0.86",
+    "@playwright/test": "^1.57.0",
+    "@types/node": "^22.20.7",
+    "typescript": "^5.9.3"
+  }
+}
