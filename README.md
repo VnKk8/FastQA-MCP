@@ -1,10 +1,28 @@
 # FastQA
 
+[![npm version](https://img.shields.io/npm/v/fastqa-mcp.svg)](https://www.npmjs.com/package/fastqa-mcp)
+[![npm downloads](https://img.shields.io/npm/dm/fastqa-mcp.svg)](https://www.npmjs.com/package/fastqa-mcp)
+[![license: MIT](https://img.shields.io/npm/l/fastqa-mcp.svg)](LICENSE)
+
 **An MCP server with a QA mindset that lets an LLM drive and test web UI applications.**
 
 FastQA connects any MCP client (Claude Code, OpenCode and others) to a real browser. The LLM clicks, types and reads the page the way a tester would, and FastQA checks every step: it asserts on text, URLs, field values and accessibility. It also **records every network call with its method, URL and status code**, so a `500 POST /api/orders` is caught even when the UI hides it.
 
 When a test passes, FastQA saves it as a flow. Saved flows replay in about a second with no LLM calls, from the MCP client or from the command line in CI.
+
+## Install
+
+Add it to Claude Code with one command (needs Node.js 20+):
+```bash
+claude mcp add fastqa -- npx -y fastqa-mcp
+```
+
+Or install it from npm to run saved tests from a terminal or CI:
+```bash
+npm install -g fastqa-mcp
+```
+
+Other MCP clients (OpenCode, Cursor, Claude Desktop, VS Code) are covered in [Setting it up](#setting-it-up-about-2-minutes-once).
 
 ---
 
