@@ -180,7 +180,7 @@ export async function runStep(session: Session, s: Step, tmpl?: Step): Promise<S
         break;
       }
       case 'expect_request': {
-        // target: "POST /api/claim" | "/api/claim" | "/regex/"; value: "200" | "2xx" | "<400" (default: < 400)
+        // target: "POST /api/orders" | "/api/orders" | "/regex/"; value: "200" | "2xx" | "<400" (default: < 400)
         const spec = need(s, 'target').trim();
         const m = /^(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\s+(.+)$/i.exec(spec);
         const method = m?.[1].toUpperCase();

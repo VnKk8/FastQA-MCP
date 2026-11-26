@@ -6,7 +6,7 @@ Fast browser control for QA agents. It's one MCP server that you plug into **Cla
 
 Playwright MCP is slow for QA because each click is a separate model turn, and the big snapshots get re-read on every turn. fastqa reduces both:
 
-| Same journey: login → claim bonus → switch currency | @playwright/mcp 0.0.86 | fastqa |
+| Same journey: login → fill a form → change a setting (bundled demo app) | @playwright/mcp 0.0.86 | fastqa |
 |---|---|---|
 | Model turns (tool calls) | 10 | **2** |
 | Tokens returned to the model | ~1,250 | **~300** (with 3 assertions included) |
@@ -20,7 +20,7 @@ Measured with `npm run bench` against the bundled demo app. Most of the time is 
 ## Why it's faster
 
 1. **Batched `act`.** You can fill a whole form, submit it and assert the result in one call, with up to 50 steps.
-2. **Targets resolve without a snapshot.** A target like `"Email"`, `"Log in"` or `"Claim Welcome bonus"` resolves through label, placeholder, role+name or text. You can still use refs (`e12`), `#id`, `css=…` or `testid=…`.
+2. **Targets resolve without a snapshot.** A target like `"Email"`, `"Log in"` or `"Add to cart"` resolves through label, placeholder, role+name or text. You can still use refs (`e12`), `#id`, `css=…` or `testid=…`.
 3. **Diffs instead of full snapshots.** After a batch, you only see `+ added` / `- removed` lines. You get a full snapshot when the page navigates or a step fails, so you can recover in the same turn.
 4. **Compact snapshots.** Each element takes one line, e.g. `e5 textbox "Email" ="ivan@test.bg" [required]`, with no YAML tree or wrapper divs.
 5. **QA assertions built in.** The `expect_text`, `expect_url`, `expect_value`, `expect_visible`, `expect_hidden`, `expect_enabled`, `expect_disabled` and `expect_count` checks poll until they pass or time out.
@@ -85,7 +85,7 @@ Use stdio with the command `node dist/index.js`.
 Step kinds: `goto click dblclick hover fill type press select check uncheck wait expect_text expect_no_text expect_url expect_title expect_value expect_visible expect_hidden expect_enabled expect_disabled expect_count expect_request expect_no_errors expect_accessible`.
 
 QA checks:
-- `expect_request`: `target` is `"POST /api/claim"`, a URL fragment or a `/regex/`. `value` is `"200"`, `"2xx"` or `"<400"` (the default). It passes if a matching API call has happened since the batch or flow started.
+- `expect_request`: `target` is `"POST /api/orders"`, a URL fragment or a `/regex/`. `value` is `"200"`, `"2xx"` or `"<400"` (the default). It passes if a matching API call has happened since the batch or flow started.
 - `expect_no_errors`: fails on JS exceptions, `console.error`, network failures and HTTP 5xx since the batch started. With `value: "strict"`, 4xx also counts. `target` is optional text to ignore.
 - `expect_accessible`: `value` is the lowest impact that fails the step: `critical`, `serious` (the default), `moderate` or `minor`.
 
@@ -98,7 +98,7 @@ Example `act`:
   { "do": "fill",  "target": "Email", "value": "ivan@test.bg" },
   { "do": "fill",  "target": "Password", "value": "{{password}}" },
   { "do": "click", "target": "Log in" },
-  { "do": "expect_url",  "value": "/lobby" },
+  { "do": "expect_url",  "value": "/dashboard" },
   { "do": "expect_text", "value": "Welcome back" }
 ] }
 ```
@@ -106,7 +106,7 @@ Example `act`:
 ## CI: run recorded flows with no model
 ```bash
 npx fastqa-mcp run '*'                        # all flows in .fastqa/flows
-npx fastqa-mcp run claim-welcome-bonus --var=password=$PW
+npx fastqa-mcp run checkout --var=password=$PW
 npx fastqa-mcp run login --data=users          # once per row of .fastqa/data/users.csv
 ```
 Each run writes `.fastqa/reports/<time>.html` and `.junit.xml`, plus `latest.html` and `latest.junit.xml`. Failure screenshots go to `.fastqa/artifacts/`.

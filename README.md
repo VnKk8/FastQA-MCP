@@ -2,7 +2,7 @@
 
 **An MCP server with a QA mindset that lets an LLM drive and test web UI applications.**
 
-FastQA connects any MCP client (Claude Code, OpenCode and others) to a real browser. The LLM clicks, types and reads the page the way a tester would, and FastQA checks every step: it asserts on text, URLs, field values and accessibility. It also **records every network call with its method, URL and status code**, so a `500 POST /api/claim` is caught even when the UI hides it.
+FastQA connects any MCP client (Claude Code, OpenCode and others) to a real browser. The LLM clicks, types and reads the page the way a tester would, and FastQA checks every step: it asserts on text, URLs, field values and accessibility. It also **records every network call with its method, URL and status code**, so a `500 POST /api/orders` is caught even when the UI hides it.
 
 When a test passes, FastQA saves it as a flow. Saved flows replay in about a second with no LLM calls, from the MCP client or from the command line in CI.
 
@@ -29,11 +29,11 @@ The result is that the same test takes **about 8 seconds instead of about 33**. 
 
 | Check | What it means in plain words |
 |---|---|
-| **Text** | "The page must say *Bonus activated*." |
-| **Page address** | "After login, we must be on the lobby page." |
-| **Field values** | "The currency box must show BGN." |
-| **Buttons** | "*Claim* must be greyed out until I tick the terms box." |
-| **Background calls** | "When I click *Claim*, the server must answer OK." This catches bugs the screen hides, like an error the page swallows. |
+| **Text** | "The page must say *Thank you for your order*." |
+| **Page address** | "After login, we must be on the dashboard." |
+| **Field values** | "The quantity box must show 2." |
+| **Buttons** | "*Place order* must be greyed out until I tick the terms box." |
+| **Background calls** | "When I click *Place order*, the server must answer 201." This catches bugs the screen hides, like an error the page swallows. |
 | **No hidden errors** | "Nothing broke behind the scenes." It catches crashes in the page's code and server errors. |
 | **Accessibility** | "People using screen readers or the keyboard can use this page," following the WCAG rules. |
 | **Phone view** | "Does it still work on an iPhone 13 screen?" |
@@ -45,9 +45,9 @@ It also handles the tricky parts of modern sites: **pop-in payment frames** (ifr
 
 ## What you get when something fails
 
-- ❌ **Which step failed and why**, written in plain language. For example: `expected "Bonus activated", but the page says "Could not claim bonus"`.
+- ❌ **Which step failed and why**, written in plain language. For example: `expected "Thank you for your order", but the page says "Payment could not be processed"`.
 - 📸 **A screenshot** of the screen at the moment it failed.
-- 🔎 **Evidence**: server errors (like `500 POST /api/claim/spins`) and errors from the page's own code. You can paste these straight into a bug report.
+- 🔎 **Evidence**: server errors (like `500 POST /api/orders`) and errors from the page's own code. You can paste these straight into a bug report.
 - 📄 **A report page** you can open in any browser: green and red bars, each step and the screenshots.
 - 🧾 **A Jenkins file** (JUnit XML), so the results show up in your pipeline like any other tests.
 
@@ -92,7 +92,7 @@ claude mcp add fastqa -- node /full/path/to/fastqa-mcp/dist/index.js
 
 Type this to your AI, in normal words:
 
-> Open https://staging.example.com/login with FastQA. Log in as qa.user@test.com with password {{password}}. Claim the welcome bonus and check that it says "Bonus activated". Make sure no server errors happened. If it passes, save it as "claim-welcome-bonus".
+> Open https://staging.example.com/login with FastQA. Log in as qa.user@test.com with password {{password}}. Add the "Blue T-shirt" to the cart, go to checkout and place the order. Check that it says "Thank you for your order" and that POST /api/orders returned 201. Make sure no server errors happened. If it passes, save it as "checkout".
 
 That's it. The AI works out the steps and runs them in one go. It then tells you PASS or FAIL, with the reasons.
 
@@ -118,7 +118,7 @@ Once a test is saved, you can rerun it in either of these ways.
 **From a terminal or Jenkins** (no AI involved, free and fast):
 ```bash
 npx fastqa-mcp run '*'                          # run every saved test
-npx fastqa-mcp run claim-welcome-bonus          # run just one
+npx fastqa-mcp run checkout                     # run just one
 ```
 
 It finishes with a ✅ or ❌ for each test and tells you where the report was saved.
@@ -138,7 +138,7 @@ npx fastqa-mcp run login --data=users
 The test runs once per line. The report shows each user's result, and password columns are never printed.
 
 ### Turning a test into real code
-> Export the claim-welcome-bonus flow.
+> Export the checkout flow.
 
 This creates a normal Playwright test file in `.fastqa/tests/`. You can add it to your automation repo like any other test.
 
@@ -186,8 +186,8 @@ Everything goes in a `.fastqa` folder inside the project you're working in:
 
 ## Good habits
 
-1. **Always end with a check.** "Click Claim" isn't a test. "Click Claim, then check it says *Bonus activated*" is.
-2. **Add "no hidden errors"** to important journeys like payments, bonuses and registration.
+1. **Always end with a check.** "Click Place order" isn't a test. "Click Place order, then check it says *Thank you for your order*" is.
+2. **Add "no hidden errors"** to important journeys like sign-up, checkout and payments.
 3. **Save every test that passes.** A saved test is a free regression test forever.
 4. **Use test users and `{{password}}`.** Never use real customer data.
 5. **Run all saved tests every night in Jenkins** and look at `reports/latest.html` in the morning.
