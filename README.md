@@ -1,8 +1,8 @@
-# fastqa
+# FastQA
 
 **An AI assistant that tests websites for you, quickly, and remembers how.**
 
-You describe a test in plain words. The AI clicks through the website, checks the results and tells you what broke. When a test passes, fastqa saves it. After that, it reruns by itself in about a second, with no AI needed.
+You describe a test in plain words. The AI clicks through the website, checks the results and tells you what broke. When a test passes, FastQA saves it. After that, it reruns by itself in about a second, with no AI needed.
 
 ---
 
@@ -10,15 +10,15 @@ You describe a test in plain words. The AI clicks through the website, checks th
 
 Think of a new team member who is very smart but has never used a computer.
 
-| Part | In real life it's... | In fastqa |
+| Part | In real life it's... | In FastQA |
 |---|---|---|
 | 🧠 The brain | The tester who decides what to do next | The AI (Claude, or whatever model OpenCode uses) |
-| ✋ The hands and eyes | Clicking, typing, reading the screen | **fastqa** |
+| ✋ The hands and eyes | Clicking, typing, reading the screen | **FastQA** |
 | 💻 The computer | The browser | Chrome, running invisibly in the background |
 
 **Why it's fast:** Other tools make the AI do one click, then stop and look, then do the next click, then look again. Each "look" takes the AI about 3 seconds to think.
 
-fastqa gives the AI a **checklist** instead: *type the email, type the password, click Log in, check the welcome message*. The whole list runs in one go. The AI only hears back **what changed** on the screen, not the whole page again.
+FastQA gives the AI a **checklist** instead: *type the email, type the password, click Log in, check the welcome message*. The whole list runs in one go. The AI only hears back **what changed** on the screen, not the whole page again.
 
 The result is that the same test takes **about 8 seconds instead of about 33**. Once it's saved, it takes **about 1.5 seconds**.
 
@@ -91,7 +91,7 @@ claude mcp add fastqa -- node /full/path/to/fastqa-mcp/dist/index.js
 
 Type this to your AI, in normal words:
 
-> Open https://staging.example.com/login with fastqa. Log in as qa.user@test.com with password {{password}}. Claim the welcome bonus and check that it says "Bonus activated". Make sure no server errors happened. If it passes, save it as "claim-welcome-bonus".
+> Open https://staging.example.com/login with FastQA. Log in as qa.user@test.com with password {{password}}. Claim the welcome bonus and check that it says "Bonus activated". Make sure no server errors happened. If it passes, save it as "claim-welcome-bonus".
 
 That's it. The AI works out the steps and runs them in one go. It then tells you PASS or FAIL, with the reasons.
 
@@ -103,7 +103,7 @@ export FASTQA_VAR_password='the-real-password'     # Mac / Linux
 setx FASTQA_VAR_password "the-real-password"       # Windows (then open a new terminal)
 ```
 
-fastqa fills it in at the last moment, so the AI never sees it. Password fields always show as `•••`.
+FastQA fills it in at the last moment, so the AI never sees it. Password fields always show as `•••`.
 
 ---
 
@@ -112,7 +112,7 @@ fastqa fills it in at the last moment, so the AI never sees it. Password fields 
 Once a test is saved, you can rerun it in either of these ways.
 
 **From the chat:**
-> Run all saved fastqa flows.
+> Run all saved FastQA flows.
 
 **From a terminal or Jenkins** (no AI involved, free and fast):
 ```bash
@@ -163,11 +163,11 @@ Everything goes in a `.fastqa` folder inside the project you're working in:
 | You want to... | Say something like... |
 |---|---|
 | Watch the browser while it works | Set `FASTQA_HEADED=true` before starting the AI tool |
-| Test on a phone screen | "Open the login page in fastqa as an **iPhone 13**." |
-| Check accessibility | "Run a fastqa **audit** on this page." |
-| See what went wrong behind the scenes | "Show me the fastqa **evidence**." |
-| Get a picture | "Take a fastqa **screenshot**." |
-| List saved tests | "List my fastqa flows." |
+| Test on a phone screen | "Open the login page in FastQA as an **iPhone 13**." |
+| Check accessibility | "Run a FastQA **audit** on this page." |
+| See what went wrong behind the scenes | "Show me the FastQA **evidence**." |
+| Get a picture | "Take a FastQA **screenshot**." |
+| List saved tests | "List my FastQA flows." |
 
 ---
 
