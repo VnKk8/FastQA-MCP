@@ -13,12 +13,17 @@ const TAIL_LINES = 25;
 const START = /^(FAIL |=== FAIL |EXPORTED SPEC FAILED|not ok \d+|✖ |([\w-]+: )?\d+ (of \d+ )?FAILED)/;
 /** A line that begins the next record, which ends the current block. */
 const NEXT = /^(ok {2}|ok \d+|FAIL |=== |not ok \d+|✔ |✖ |# |> )/;
+/** The 0.3 suites print each tool call as "=== OK name" followed by the tool's own output, which may quote a failing flow on purpose. */
+const QUOTE = /^=== (OK|FAIL)/;
+const UNQUOTE = /^(ok {2}|ALL .*PASSED$|([\w-]+: )?\d+ (of \d+ )?FAILED$|[\w-]+: all \d+ checks passed$)/;
 
 export function failures(text) {
   const lines = text.replace(/\x1b\[[0-9;]*[A-Za-z]/g, '').split(/\r?\n/);
   const blocks = [];
+  let quoted = false;
   for (let i = 0; i < lines.length; i++) {
-    if (!START.test(lines[i])) continue;
+    if (QUOTE.test(lines[i])) quoted = true; else if (UNQUOTE.test(lines[i])) quoted = false;
+    if (!START.test(lines[i]) || (quoted && lines[i].startsWith('FAIL '))) continue;
     const block = [lines[i]];
     for (let j = i + 1; j < lines.length && block.length < MAX_LINES && !NEXT.test(lines[j]); j++) block.push(lines[j]);
     blocks.push(block.join('\n').trimEnd());

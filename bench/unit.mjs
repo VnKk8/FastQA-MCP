@@ -332,4 +332,6 @@ test('CI annotations: each failed check becomes one error, with its detail, and 
   assert.equal(many.filter((c) => c.startsWith('::error')).length, 9, 'GitHub shows ten errors per step at most');
   assert.ok(many.some((c) => c.startsWith('::warning title=5 earlier failure(s) not shown')) && many[0].includes('FAIL check 5'));
   assert.deepEqual(commands('ok   everything\nall 3 checks passed').map((c) => c.split('::')[1]), ['notice title=Last lines of the test log']);
+  const quoted = failures(['=== OK   flow run with a wrong password', '0/1 flows passed', 'FAIL add-to-cart (5709ms)', '    5. ✗ expect_url "/account"', '', 'ALL CHECKS PASSED', 'FAIL a real check', '     why'].join('\n'));
+  assert.deepEqual(quoted.blocks, ['FAIL a real check\n     why'], 'a failing flow quoted inside a passing check is not a failure');
 });

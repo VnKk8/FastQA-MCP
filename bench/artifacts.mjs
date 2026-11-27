@@ -133,7 +133,10 @@ const jsonl = (...p) => readFileSync(path.join(...p), 'utf8').split('\n').filter
     await call('open', { url: `${base}/login` });
     await call('act', { scope: 'login-and-order', steps: [{ do: 'fill', target: 'Email', value: 'john@example.com' }, { do: 'fill', target: 'Password', value: '{{password}}' }, { do: 'click', target: 'Log in' }, { do: 'expect_url', value: '/account' }] });
     await call('open', { url: `${base}/orders?notify=500&poll=150` });
-    return call('act', { scope: 'login-and-order', steps: [...place, { do: 'wait', value: '900' }] });
+    // Long enough for the steady state to decide. The first polls of a page are attributed by design (one starts during
+    // the click, three more establish the rhythm), so with a 900 ms wait the result hung on how many polls a machine
+    // fitted in: 9 of 17 background on a fast one, 7 of 15 on a slow CI runner.
+    return call('act', { scope: 'login-and-order', steps: [...place, { do: 'wait', value: '2500' }] });
   };
   let out = await journey();
   has('discovery mode does not change results', out, /^PASSED 3\/3/, 'NET-5XX');
