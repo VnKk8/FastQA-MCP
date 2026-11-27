@@ -4,6 +4,10 @@ All notable changes to `fastqa-mcp`. Versions follow [semantic versioning](https
 
 ## Unreleased
 
+### Changed
+
+- **New package and registry descriptions.** npm and the MCP Registry now describe FastQA by what it does for the agent: it explores a web app, finds and explains the bugs a passing page hides, and replays the tests in CI.
+
 ### Fixed
 
 - **The Release workflow's MCP Registry job waits for npm.** npm can take many minutes to validate a new version after `npm publish` returns; for 1.0.2 the job gave up after 2.5 minutes. It now waits until npm shows the version (up to 45 minutes) before publishing to the registry, and its error message no longer claims npm already has the version.

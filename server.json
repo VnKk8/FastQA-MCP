@@ -2,7 +2,7 @@
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.VnKk8/fastqa-mcp",
   "title": "FastQA MCP",
-  "description": "Browser QA for AI agents: whole tests in one call, finds and explains hidden bugs, CI replay.",
+  "description": "Lets AI agents explore web apps, find and explain hidden bugs, and replay the tests in CI.",
   "repository": {
     "url": "https://github.com/VnKk8/FastQA-MCP",
     "source": "github"
