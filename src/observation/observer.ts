@@ -1,6 +1,6 @@
 // One Observer per browser context (= one session). It turns Playwright events into sanitized, bounded observations,
 // keeps each request's lifecycle, and feeds the quality engine. It never blocks an action: capture failures are recorded, not thrown.
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import type { ConsoleMessage, Frame, Page, Request, Response } from 'playwright';
 import type { Config } from '../config.js';
 import { ActionTracker } from '../correlation/actions.js';
@@ -18,6 +18,21 @@ const MAX_REQUESTS = 3000;
 const BODY_TIMEOUT_MS = 5000;
 
 export interface ObserverSink { onEvent?(e: Observation): void; onRequestDone?(r: RequestRecord): void }
+
+/**
+ * Same URL and same body, same key; it never leaves memory. A body Playwright cannot see (a file in a form, a blob) is
+ * unknown, and an unknown body never equals another: two uploads of different files are not a double submit.
+ */
+let unknownBodies = 0;
+function bodyKeyOf(req: Request): string {
+  const h = createHash('sha1').update(req.url());
+  try {
+    const b = req.postDataBuffer();
+    if (!b) return req.headers()['content-type'] ? `unknown:${++unknownBodies}` : `${h.digest('hex').slice(0, 16)}:empty`;
+    if (b.length > 1024 * 1024) return `${h.digest('hex').slice(0, 16)}:len:${b.length}`;
+    return h.update(b).digest('hex').slice(0, 16);
+  } catch { return `unknown:${++unknownBodies}`; }
+}
 
 export class Observer {
   readonly sessionId = `S-${randomBytes(4).toString('hex')}`;
@@ -40,6 +55,15 @@ export class Observer {
   readonly firstParty = new Set<string>();
   readonly stats = { requests: 0, tracked: 0, firstParty: 0, thirdParty: 0, bodiesCaptured: 0, bodiesSkipped: 0, consoleErrors: 0, pageErrors: 0 };
   readonly sinks: ObserverSink[] = [];
+  /** a fingerprint of each submission's body (hash or length), never the body: kept out of the record and its exports */
+  private bodyKeys = new WeakMap<RequestRecord, string>();
+  bodyKey = (r: RequestRecord) => this.bodyKeys.get(r) ?? '';
+  /** first-party fetch / XHR / document requests attributed to this action (ambiguous ones excluded) */
+  requestsOf(actionId: string): RequestRecord[] {
+    const out: RequestRecord[] = [];
+    for (const r of this.requests.values()) if (r.association.actionId === actionId && r.firstParty && r.tracked) out.push(r);
+    return out;
+  }
   /** what is known about the environment (fastqa version, browser, device); goes into summaries and bug drafts */
   readonly environment: Record<string, unknown> = {};
   disposed = false;
@@ -118,6 +142,7 @@ export class Observer {
     this.stats.requests++; if (firstParty) this.stats.firstParty++; else this.stats.thirdParty++;
     if (tracked) {
       this.stats.tracked++;
+      if (!/^(GET|HEAD|OPTIONS)$/.test(method)) this.bodyKeys.set(rec, bodyKeyOf(req));
       rec.held = this.actions.hold(association);
       if (firstParty) this.pending.add(rec);
       const ev = this.emit('request', { requestId: rec.id, method, url: rec.url, resourceType, firstParty, navigation: navigation || undefined, redirectedFrom: prev?.id }, association, rec);

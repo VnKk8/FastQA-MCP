@@ -2,6 +2,7 @@
 import http from 'node:http';
 import { cookiePage } from './cookie-pages.mjs';
 import { uploadPage, multipartFiles } from './upload-pages.mjs';
+import { factsPage, factsApi } from './facts-pages.mjs';
 
 const page = (title, body) => `<!doctype html><html><head><meta charset="utf-8"><title>${title}</title>
 <style>body{font-family:sans-serif;max-width:720px;margin:40px auto}label{display:block;margin:8px 0}
@@ -213,6 +214,11 @@ export function start(port = 0) {
     if (pathname === '/api/upload') return send(200, 'application/json', JSON.stringify({ files: multipartFiles(raw, req.headers['content-type']) }));
     const uploadFixture = uploadPage(pathname);
     if (uploadFixture) return send(200, 'text/html', uploadFixture);
+    const factsFixture = factsPage(pathname);
+    if (factsFixture) return send(200, 'text/html', factsFixture);
+    if (pathname === '/img/redir') { res.writeHead(302, { location: '/img/missing.png' }); return void res.end(); }
+    const factsRoute = factsApi(pathname);
+    if (factsRoute) return send(...factsRoute);
     if (pathname === '/cookies/slow-body') { // the document arrives in two parts: for 3 seconds it has a head and no body
       res.writeHead(200, { 'content-type': 'text/html' });
       res.write('<!doctype html><html><head><meta charset="utf-8"><title>Cookies reloaded</title></head>');

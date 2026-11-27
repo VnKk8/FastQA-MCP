@@ -17,6 +17,7 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { VERSION } from './version.js';
 import { COOKIE_CHOICES } from './cookies.js';
+import { closest, pageLine, eventText, FACT } from './facts.js';
 const session = new Session();
 installServices();
 /** Every text result leaves through here: known secrets and credential patterns are removed at the boundary. */
@@ -89,7 +90,8 @@ server.registerTool('open', {
     session.lastLines = snap.items.map((i) => i.line);
     const q = qualityOf(session.obs, b.requestsBefore);
     const banner = b.lines.slice(1).map((l) => `\n${l}`).join(''); // what the cookies step did, when one ran
-    return text(`${Session.render(snap)}${banner}\n(${Date.now() - t0}ms)${evidenceSummary()}${qaTail(q)}`, structured(b, q));
+    const happened = b.events.flat().map((ev) => `\n↳ ${eventText(ev)}`).join(''); // a dialog or download while the page opened
+    return text(`${Session.render(snap)}${pageLine(snap.page)}${happened}${banner}\n(${Date.now() - t0}ms)${evidenceSummary()}${qaTail(q)}`, structured(b, q));
 }));
 const StepSchema = z.object({
     do: z.enum(STEP_KINDS),
@@ -118,10 +120,18 @@ server.registerTool('act', {
         return text('No page open. Call open first.');
     const t0 = Date.now();
     const urlBefore = session.page.url();
-    const b = await runBatch(session, steps, { kind: 'act', scope, strict, finalSettleMs: 1500, onRecorded: (r) => session.tape.push(r) });
+    const b = await runBatch(session, steps, { kind: 'act', scope, strict, finalSettleMs: 1500, facts: true, onRecorded: (r) => session.tape.push(r) });
     const failed = !b.ok;
     const snap = await session.snapshot();
     const lines = snap.items.map((i) => i.line);
+    const shown = [...b.text];
+    if (failed) {
+        // a target that matched nothing: the closest names on the page now, with their refs, so the retry needs no snapshot
+        const miss = /No visible element matches "((?:[^"\\]|\\.)*)"/.exec(b.lines[b.lines.length - 1] ?? '');
+        const near = miss ? closest(miss[1], lines) : [];
+        if (near.length)
+            shown.push(`${FACT}closest: ${near.join(', ')}`);
+    }
     let tail = '';
     if (failed) {
         let shot = '';
@@ -153,10 +163,10 @@ server.registerTool('act', {
     }
     session.lastLines = lines;
     const head = failed
-        ? `FAILED at step ${b.lines.length}/${steps.length} after ${Date.now() - t0}ms`
+        ? `FAILED at step ${b.failedAt ?? b.lines.length}/${steps.length} after ${Date.now() - t0}ms`
         : `PASSED ${steps.length}/${steps.length} steps in ${Date.now() - t0}ms`;
     const q = qualityOf(session.obs, b.requestsBefore);
-    return text(`${head}\n${b.lines.join('\n')}${tail}${evidenceSummary()}${qaTail(q)}`, structured(b, q));
+    return text(`${head}\n${shown.join('\n')}${tail}${evidenceSummary()}${qaTail(q)}`, structured(b, q));
 }));
 server.registerTool('snapshot', {
     description: 'Compact page snapshot. mode=interactive (default): controls, headings, alerts. mode=full: also visible text. root=css to scope to part of the page.',

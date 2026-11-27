@@ -5,6 +5,7 @@ import { Observer } from './observation/observer.js';
 import { redactor } from './privacy/redact.js';
 import { FLOW_DIR } from './dirs.js';
 import { madeDir, removeMadeDirs } from './upload.js';
+import { probeInit, mergeProbes } from './probe.js';
 /** Thrown in strict locator mode when a target matches more than one element. */
 export class AmbiguousTargetError extends Error {
 }
@@ -100,12 +101,42 @@ export class Session {
             for (const h of sessionHooks.created)
                 h(this);
             this.attachContext(this.context);
+            // the page probe: what an action did that the final snapshot cannot show (see probe.ts)
+            await this.context.addInitScript(probeInit).catch(() => { });
         }
         if (!this.page || this.page.isClosed()) {
             this.page = this.context.pages()[0] ?? (await this.context.newPage());
             this.attachPage(this.page);
+            await this.page.evaluate(probeInit).catch(() => { }); // a page that was open before (attached over CDP)
         }
         return this.page;
+    }
+    /**
+     * What the browser did outside the page since the last takeEvents(): native dialogs (handled exactly as Playwright does
+     * when nobody listens: beforeunload accepted, the others dismissed), downloads, and file pickers the page opened.
+     */
+    events = [];
+    takeEvents() { return this.events.splice(0); }
+    /** set while an upload step answers its own file picker, which is not news */
+    uploading = false;
+    note(e) { if (this.events.length < 20)
+        this.events.push(e); }
+    /** The frames whose probe is read: the page and its first-party frames (third-party frames are ads and widgets). */
+    probeFrames() {
+        const page = this.page;
+        if (!page || page.isClosed())
+            return [];
+        const first = (f) => { try {
+            return this.obs?.firstParty.has(new URL(f.url()).origin) ?? false;
+        }
+        catch {
+            return false;
+        } };
+        return [page.mainFrame(), ...page.frames().filter((f) => f !== page.mainFrame() && !f.isDetached() && first(f)).slice(0, 4)];
+    }
+    /** What the page probes saw since their previous drain (and starts a new window); undefined when none could be read. */
+    async probeDrain() {
+        return mergeProbes(await Promise.all(this.probeFrames().map((f) => f.evaluate(() => window.__fqProbe?.drain()).catch(() => undefined))));
     }
     /**
      * Listeners are bound once per context, at context level, so the first request of a new page or popup is never missed
@@ -238,9 +269,23 @@ export class Session {
                     this.page = open[open.length - 1];
             }
         };
+        // Native dialogs: recorded for the step's facts and handled exactly as Playwright does when nobody listens:
+        // beforeunload is accepted (leaving goes ahead), alert / confirm / prompt are dismissed. Behaviour is unchanged.
+        const dialog = (d) => {
+            const beforeunload = d.type() === 'beforeunload';
+            this.note({ kind: 'dialog', type: d.type(), text: redactor.text(d.message().replace(/\s+/g, ' ').trim().slice(0, 80)) });
+            (beforeunload ? d.accept() : d.dismiss()).catch(() => { });
+        };
+        const download = (d) => this.note({ kind: 'download', text: redactor.text(d.suggestedFilename().slice(0, 80)) });
+        // Listening also keeps a headed browser from opening the native picker, which would block the run.
+        const picker = () => { if (!this.uploading)
+            this.note({ kind: 'picker', text: '' }); };
         page.on('framenavigated', nav);
         page.on('close', closed);
-        this.detachers.push(() => { page.off('framenavigated', nav); page.off('close', closed); });
+        page.on('dialog', dialog);
+        page.on('download', download);
+        page.on('filechooser', picker);
+        this.detachers.push(() => { page.off('framenavigated', nav); page.off('close', closed); page.off('dialog', dialog); page.off('download', download); page.off('filechooser', picker); });
     }
     /** maxMs: longest to wait for the context to close (only `close` sets it: the browser is closed right after anyway). */
     async closeContext(maxMs) {
@@ -271,6 +316,7 @@ export class Session {
         this.lastLines = [];
         this.hints.clear();
         this.consentAsked.clear();
+        this.events = [];
         await removeMadeDirs(this.madeDirs.splice(0));
     }
     /**
@@ -349,7 +395,7 @@ export class Session {
         for (const it of items)
             if (it.ref && it.hint)
                 this.hints.set(it.ref, { hint: it.hint, code: it.code, frame: it.frame, gen: this.docGen });
-        return { items, truncated, url: res.url, title: res.title };
+        return { items, truncated, url: res.url, title: res.title, page: res.page };
     }
     /** Visible child frames with their selector chain from the top page (nested frames supported). */
     async listFrames() {

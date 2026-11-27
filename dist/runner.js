@@ -55,6 +55,8 @@ export async function runStep(session, s, tmpl) {
     const label = labelOf(tmpl ?? s);
     let recorded = { ...s };
     let note = '';
+    const facts = [];
+    let target; // the element the step acted on, to explain a failure
     try {
         switch (s.do) {
             case 'goto': {
@@ -90,6 +92,7 @@ export async function runStep(session, s, tmpl) {
             case 'check':
             case 'uncheck': {
                 const r = await session.resolve(need(s, 'target'), 'click', timeout, s.frame);
+                target = r.loc;
                 if (s.do === 'click')
                     await r.loc.click({ timeout });
                 if (s.do === 'dblclick')
@@ -122,6 +125,15 @@ export async function runStep(session, s, tmpl) {
                         if (!/Input of type "file" cannot be filled/.test(String(e?.message)))
                             throw e;
                         throw new Error(`${q(s.target)} is a file input: use the upload step, e.g. {"do":"upload","target":${q(s.target)},"value":"photo.png"}`);
+                    }
+                    // a field that keeps something else than was typed (maxlength, an input mask, a number field) is a fact
+                    // the agent would otherwise only find by reading the value back. Never for passwords or secret values.
+                    if (!used?.length && !/pass|pwd|secret|token/i.test(s.target || '')) {
+                        const held = await r.loc.evaluate((el) => (el.type === 'password' || el.value === undefined ? null : { v: String(el.value), ml: el.maxLength })).catch(() => null);
+                        if (held && held.v !== value) {
+                            const cut = held.ml > 0 && value.length > held.ml && held.v === value.slice(0, held.ml);
+                            facts.push(`field holds ${q(held.v.length > 60 ? held.v.slice(0, 59) + '…' : held.v)}${cut ? ` (maxlength ${held.ml})` : ''}`);
+                        }
                     }
                 }
                 if (s.do === 'type') {
@@ -207,6 +219,7 @@ export async function runStep(session, s, tmpl) {
                     let wake = () => { };
                     const onChooser = (c) => { fc = c; wake(); };
                     page.on('filechooser', onChooser);
+                    session.uploading = true; // this picker is the step's own, not news for the facts
                     try {
                         await r.loc.click({ timeout });
                         if (!fc)
@@ -214,6 +227,7 @@ export async function runStep(session, s, tmpl) {
                     }
                     finally {
                         page.off('filechooser', onChooser);
+                        session.uploading = false;
                     }
                     const chooser = fc;
                     if (!chooser)
@@ -374,12 +388,38 @@ export async function runStep(session, s, tmpl) {
         }
         if (recorded && tmpl?.value !== undefined)
             recorded.value = tmpl.value;
-        return { ok: true, ms: Date.now() - t0, line: `✓ ${label}${note ? ' — ' + note : ''} (${Date.now() - t0}ms)`, recorded };
+        return { ok: true, ms: Date.now() - t0, line: `✓ ${label}${note ? ' — ' + note : ''} (${Date.now() - t0}ms)`, recorded, facts };
     }
     catch (e) {
-        const msg = String(e?.message || e).split('\n')[0].replace(/^locator\.\w+: /, '');
-        return { ok: false, ms: Date.now() - t0, line: `✗ ${label} — ${msg}` };
+        const full = String(e?.message || e);
+        const msg = full.split('\n')[0].replace(/^locator\.\w+: /, '');
+        return { ok: false, ms: Date.now() - t0, line: `✗ ${label} — ${msg}`, facts: [...facts, ...await explain(full, s, target)] };
     }
+}
+/**
+ * Why an action on a found element did not happen, from Playwright's own log of its attempts: an element on top that
+ * takes the click, or a control that stayed disabled (with the form fields that keep it so). Read only on failure.
+ */
+async function explain(full, s, target) {
+    const who = q(s.target ?? '');
+    const cover = /(<[a-z][^>]{0,200}>)[^\n]*?intercepts pointer events/i.exec(full);
+    if (cover)
+        return [`${who} is covered by ${cover[1].replace(/<\/[a-z]+>$/i, '')}`];
+    if (target && /element is not enabled/.test(full)) {
+        const why = await target.evaluate((el) => {
+            const form = el.form || el.closest('form');
+            const name = (f) => (f.labels?.[0]?.textContent || f.getAttribute('aria-label') || f.placeholder || f.name || '').replace(/\s+/g, ' ').trim().slice(0, 40);
+            const bad = form ? Array.from(form.querySelectorAll(':invalid')).filter((f) => f !== form && f !== el) : [];
+            return { empty: bad.filter((f) => f.validity?.valueMissing).map(name), invalid: bad.filter((f) => !f.validity?.valueMissing).map(name) };
+        }, undefined, { timeout: 500 }).catch(() => undefined);
+        const parts = [`${who} stayed disabled`];
+        if (why?.empty.length)
+            parts.push(`Empty required fields: ${why.empty.slice(0, 5).map((n) => q(n)).join(', ')}`);
+        if (why?.invalid.length)
+            parts.push(`Invalid fields: ${why.invalid.slice(0, 5).map((n) => q(n)).join(', ')}`);
+        return [parts.join('. ')];
+    }
+    return [];
 }
 function maskish(s) {
     return /pass|pwd|secret|token/i.test(s.target || '') ? '•••' : s.value;

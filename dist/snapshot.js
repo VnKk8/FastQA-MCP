@@ -146,7 +146,31 @@ export function snapshotInPage(opts) {
             parts.push('[required]');
         const inv = el.getAttribute('aria-invalid');
         if (inv === 'true')
-            parts.push('[invalid]');
+            parts.push('[invalid]'); // the page's aria-invalid, exactly as in 0.3
+        // Additions since 0.3, always after its states: the rules the browser enforces, so boundaries can be tested without
+        // trying, and the browser's own validation message once it applies to the person (after typing or a submit
+        // attempt), so an untouched required field is not called invalid.
+        if (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA') {
+            const t = (h.type || '').toLowerCase();
+            if (['email', 'tel', 'url', 'number', 'date', 'time', 'datetime-local', 'month', 'week'].includes(t))
+                parts.push('type:' + t);
+            for (const a of ['maxlength', 'minlength', 'min', 'max', 'step']) {
+                const v = el.getAttribute(a);
+                if (v)
+                    parts.push(`${a}:${clip(v, 20)}`);
+            }
+            const p = el.getAttribute('pattern');
+            if (p)
+                parts.push('pattern:' + (/\s|"/.test(p) ? q(clip(p, 30)) : clip(p, 30)));
+        }
+        let userInvalid = false;
+        try {
+            userInvalid = el.matches(':user-invalid');
+        }
+        catch { /* older browser */ }
+        const vmsg = h.validationMessage || '';
+        if (userInvalid && vmsg)
+            parts.push(`invalid:${q(clip(vmsg, 60))}`);
         return parts.join(' ');
     };
     const hintOf = (el, role, name) => {
@@ -272,7 +296,27 @@ export function snapshotInPage(opts) {
     }
     if (hiddenFiles > MAX_HIDDEN_FILES)
         items.push({ line: `… ${hiddenFiles - MAX_HIDDEN_FILES} more hidden file inputs` });
-    return { items, truncated, url: location.href, title: document.title, maxRef: w.__fq.n };
+    // page facts for open: forms and fields at a glance, and whether a bot check stands in for the site
+    const FIELD = 'input:not([type=hidden]):not([type=submit]):not([type=button]):not([type=reset]):not([type=image]),select,textarea';
+    let forms = 0;
+    let fields = 0;
+    let required = 0;
+    for (const f of Array.from(document.forms)) {
+        const shownFields = Array.from(f.querySelectorAll(FIELD)).filter((x) => visible(x));
+        if (!shownFields.length)
+            continue;
+        forms++;
+        fields += shownFields.length;
+        required += shownFields.filter((x) => x.required).length;
+    }
+    // A bot check is the interstitial page of a protection service, said in its own fixed words; "Access denied" or a
+    // "Security Checkup" page belong to the site itself. A captcha counts when its challenge is shown, not its invisible badge.
+    const BOT = /^(just a moment\b|attention required!?\s*\|\s*cloudflare|verify(ing)? (that )?you are (a )?human|are you a robot\b|checking your browser\b|checking if the site connection is secure|ddos protection by|please verify you are a human)/i;
+    const heading = clip(document.querySelector('h1')?.textContent || '', 60);
+    const botCheck = forms === 0 ? (BOT.test(document.title.trim()) ? clip(document.title, 60) : BOT.test(heading) ? heading : undefined) : undefined;
+    const captcha = Array.from(document.querySelectorAll('iframe')).some((f) => /recaptcha\/api2\/(anchor|bframe)|hcaptcha\.com|challenges\.cloudflare\.com|turnstile/i.test(f.src) && !/size=invisible/i.test(f.src) && visible(f));
+    const page = { forms, fields, required, botCheck, captcha };
+    return { items, truncated, url: location.href, title: document.title, maxRef: w.__fq.n, page };
 }
 // Resolves when the DOM has been quiet for `quietMs`, or after `maxMs`.
 export function domSettleInPage(args) {

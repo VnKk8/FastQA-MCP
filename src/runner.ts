@@ -3,7 +3,7 @@ import { Session, DEFAULT_TIMEOUT, sleep, AmbiguousTargetError, warnLegacyTls, t
 import { redactor } from './privacy/redact.js';
 import { dismissCookies, describeOutcome, COOKIE_CHOICES, COOKIE_WAIT_MS, COOKIE_RECHECK_MS, type CookieChoice } from './cookies.js';
 import { prepareUpload, accepts, sendAsBytes, asBytes } from './upload.js';
-import type { FileChooser } from 'playwright';
+import type { FileChooser, Locator } from 'playwright';
 
 /** How long an upload step waits for the file picker once its click on an element that is not a file input has landed. */
 const CHOOSER_WAIT_MS = 2000;
@@ -20,6 +20,8 @@ export interface StepResult {
   ms: number;
   line: string;
   recorded?: RecordedStep;
+  /** facts for the agent about this step (act results only): what a field holds, why a step failed */
+  facts?: string[];
 }
 
 const q = JSON.stringify;
@@ -58,6 +60,8 @@ export async function runStep(session: Session, s: Step, tmpl?: Step): Promise<S
   const label = labelOf(tmpl ?? s);
   let recorded: RecordedStep | undefined = { ...s };
   let note = '';
+  const facts: string[] = [];
+  let target: Locator | undefined; // the element the step acted on, to explain a failure
   try {
     switch (s.do) {
       case 'goto': {
@@ -80,6 +84,7 @@ export async function runStep(session: Session, s: Step, tmpl?: Step): Promise<S
       }
       case 'click': case 'dblclick': case 'hover': case 'check': case 'uncheck': {
         const r = await session.resolve(need(s, 'target'), 'click', timeout, s.frame);
+        target = r.loc;
         if (s.do === 'click') await r.loc.click({ timeout });
         if (s.do === 'dblclick') await r.loc.dblclick({ timeout });
         if (s.do === 'hover') await r.loc.hover({ timeout });
@@ -101,6 +106,15 @@ export async function runStep(session: Session, s: Step, tmpl?: Step): Promise<S
           catch (e: any) {
             if (!/Input of type "file" cannot be filled/.test(String(e?.message))) throw e;
             throw new Error(`${q(s.target)} is a file input: use the upload step, e.g. {"do":"upload","target":${q(s.target)},"value":"photo.png"}`);
+          }
+          // a field that keeps something else than was typed (maxlength, an input mask, a number field) is a fact
+          // the agent would otherwise only find by reading the value back. Never for passwords or secret values.
+          if (!used?.length && !/pass|pwd|secret|token/i.test(s.target || '')) {
+            const held = await r.loc.evaluate((el: any) => (el.type === 'password' || el.value === undefined ? null : { v: String(el.value), ml: el.maxLength })).catch(() => null);
+            if (held && held.v !== value) {
+              const cut = held.ml > 0 && value.length > held.ml && held.v === value.slice(0, held.ml);
+              facts.push(`field holds ${q(held.v.length > 60 ? held.v.slice(0, 59) + '…' : held.v)}${cut ? ` (maxlength ${held.ml})` : ''}`);
+            }
           }
         }
         if (s.do === 'type') { await r.loc.click({ timeout }); await r.loc.pressSequentially(value, { delay: 10 }); }
@@ -169,10 +183,11 @@ export async function runStep(session: Session, s: Step, tmpl?: Step): Promise<S
           let fc: FileChooser | undefined; let wake = () => {};
           const onChooser = (c: FileChooser) => { fc = c; wake(); };
           page.on('filechooser', onChooser);
+          session.uploading = true; // this picker is the step's own, not news for the facts
           try {
             await r.loc.click({ timeout });
             if (!fc) await new Promise<void>((res) => { wake = res; setTimeout(res, CHOOSER_WAIT_MS); });
-          } finally { page.off('filechooser', onChooser); }
+          } finally { page.off('filechooser', onChooser); session.uploading = false; }
           const chooser = fc as FileChooser | undefined;
           if (!chooser) throw new Error(`clicking ${q(s.target)} opened no file picker. Target the file input itself: the snapshot lists it as "file", hidden ones too`);
           accept = await chooser.element().evaluate((el: any) => el.accept || '').catch(() => '');
@@ -311,11 +326,35 @@ export async function runStep(session: Session, s: Step, tmpl?: Step): Promise<S
         throw new Error(`Unknown step "${s.do}". Valid: ${STEP_KINDS.join(', ')}`);
     }
     if (recorded && tmpl?.value !== undefined) recorded.value = tmpl.value;
-    return { ok: true, ms: Date.now() - t0, line: `✓ ${label}${note ? ' — ' + note : ''} (${Date.now() - t0}ms)`, recorded };
+    return { ok: true, ms: Date.now() - t0, line: `✓ ${label}${note ? ' — ' + note : ''} (${Date.now() - t0}ms)`, recorded, facts };
   } catch (e: any) {
-    const msg = String(e?.message || e).split('\n')[0].replace(/^locator\.\w+: /, '');
-    return { ok: false, ms: Date.now() - t0, line: `✗ ${label} — ${msg}` };
+    const full = String(e?.message || e);
+    const msg = full.split('\n')[0].replace(/^locator\.\w+: /, '');
+    return { ok: false, ms: Date.now() - t0, line: `✗ ${label} — ${msg}`, facts: [...facts, ...await explain(full, s, target)] };
   }
+}
+
+/**
+ * Why an action on a found element did not happen, from Playwright's own log of its attempts: an element on top that
+ * takes the click, or a control that stayed disabled (with the form fields that keep it so). Read only on failure.
+ */
+async function explain(full: string, s: Step, target?: Locator): Promise<string[]> {
+  const who = q(s.target ?? '');
+  const cover = /(<[a-z][^>]{0,200}>)[^\n]*?intercepts pointer events/i.exec(full);
+  if (cover) return [`${who} is covered by ${cover[1].replace(/<\/[a-z]+>$/i, '')}`];
+  if (target && /element is not enabled/.test(full)) {
+    const why = await target.evaluate((el: any) => {
+      const form = el.form || el.closest('form');
+      const name = (f: any) => (f.labels?.[0]?.textContent || f.getAttribute('aria-label') || f.placeholder || f.name || '').replace(/\s+/g, ' ').trim().slice(0, 40);
+      const bad = form ? Array.from(form.querySelectorAll(':invalid')).filter((f: any) => f !== form && f !== el) : [];
+      return { empty: bad.filter((f: any) => f.validity?.valueMissing).map(name), invalid: bad.filter((f: any) => !f.validity?.valueMissing).map(name) };
+    }, undefined, { timeout: 500 }).catch(() => undefined);
+    const parts = [`${who} stayed disabled`];
+    if (why?.empty.length) parts.push(`Empty required fields: ${why.empty.slice(0, 5).map((n: string) => q(n)).join(', ')}`);
+    if (why?.invalid.length) parts.push(`Invalid fields: ${why.invalid.slice(0, 5).map((n: string) => q(n)).join(', ')}`);
+    return [parts.join('. ')];
+  }
+  return [];
 }
 
 function maskish(s: Step) {

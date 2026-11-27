@@ -4,6 +4,7 @@ import type { Association, Finding, Observation, RequestRecord, Severity } from 
 import { sevRank } from '../observation/types.js';
 import type { Config } from '../config.js';
 import { endpointMatches, jsonPointer } from '../util/paths.js';
+import { deadClick, duplicates, silentFailures, type ActionEffects } from './effects.js';
 
 export const RULES = [
   { id: 'NET-5XX', version: 1, description: 'First-party HTTP 5xx response' },
@@ -19,6 +20,10 @@ export const RULES = [
   { id: 'PERF-BASELINE', version: 1, description: 'Response slower than the recorded baseline for this environment' },
   { id: 'PERF-CALLS', version: 1, description: 'Endpoint called more often than the configured limit' },
   { id: 'STATE-INVARIANT', version: 1, description: 'Configured UI state expectation not met after a matching response' },
+  { id: 'SILENT-FAILURE', version: 1, description: 'A first-party submission of an action failed and, until the batch ended, the page showed no message, dialog, new text, field change or new page' },
+  { id: 'DUPLICATE-SUBMIT', version: 1, description: 'One action sent the same submission (method, URL and body) more than once' },
+  { id: 'DEAD-CLICK', version: 1, description: 'A click on a button or link changed nothing while it was watched: no request, navigation, DOM or form change, dialog, download or picker' },
+  { id: 'BROKEN-IMAGE', version: 1, description: 'A first-party image arrived but could not be shown (its request did not fail)' },
 ] as const;
 export type RuleId = typeof RULES[number]['id'];
 const ruleVersion = (id: string) => RULES.find((r) => r.id === id)?.version ?? 1;
@@ -162,6 +167,43 @@ export class QualityEngine {
     this.report({
       ruleId: 'CONSOLE-ERROR', severity: 'low', ev, association: ev.action, signature: normText(text), confidence: 'low',
       title: `console.error: ${text.slice(0, 120)}`, actual: text.slice(0, 300), expected: 'no console errors',
+    });
+  }
+
+  /** Rules over what one action did (see effects.ts). Called once per action, when its batch ends. */
+  onAction(e: ActionEffects, all: Iterable<RequestRecord>) {
+    if (!this.enabled) return;
+    const assoc: Association = { actionId: e.action.actionId, confidence: 'inferred', reason: 'observed while the action ran and settled' };
+    for (const rec of silentFailures(e, all)) {
+      const what = rec.status !== undefined && rec.status >= 400 ? `returned ${rec.status}` : `failed (${(rec.failure ?? 'failed').replace(/^net::/, '')})`;
+      this.report({
+        ruleId: 'SILENT-FAILURE', severity: 'medium', rec, association: rec.association, signature: 'silent',
+        title: `${rec.method} ${rec.route} ${what} and the page showed nothing`,
+        actual: `after ${e.action.label}: no message, dialog, new text, field change or new page until the batch ended`, expected: 'the person is told that it did not work',
+      });
+    }
+    for (const g of duplicates(e)) {
+      const rec = g[1];
+      this.report({
+        ruleId: 'DUPLICATE-SUBMIT', severity: 'medium', rec, association: rec.association, signature: `${g.length}`,
+        title: `${rec.method} ${rec.route} sent ${g.length}× by one ${e.action.do}`,
+        actual: `${g.length} identical requests (${g.map((r) => r.id).join(', ')})`, expected: 'one submission per action',
+      });
+    }
+    if (deadClick(e)) {
+      this.report({
+        ruleId: 'DEAD-CLICK', severity: 'low', association: assoc, signature: e.action.label, confidence: 'medium',
+        title: `${e.action.label} had no visible effect`, actual: 'no request, no navigation, no DOM change, no dialog, no scroll', expected: 'a visible reaction to the click',
+      });
+    }
+  }
+
+  /** A first-party image the page could not show. Only when its request did not fail: a failed one is already NET-*. */
+  brokenImage(url: string, association: Association) {
+    if (!this.enabled) return;
+    this.report({
+      ruleId: 'BROKEN-IMAGE', severity: 'low', association, signature: url, confidence: 'medium',
+      title: `image ${url} could not be shown`, actual: 'the browser could not decode it', expected: 'a valid image',
     });
   }
 
