@@ -16,20 +16,31 @@ const TRACE_HEADERS = ['x-request-id', 'x-correlation-id', 'x-trace-id', 'tracep
 const SENSITIVE_PATH = /login|logout|signin|sign-in|auth|oauth|token|password|passwd|session|secret|payment|checkout\/pay|card|billing|2fa|otp|mfa/i;
 const MAX_REQUESTS = 3000;
 const BODY_TIMEOUT_MS = 5000;
+/** index bounds: actions whose requests are indexed, and requests kept per action */
+const MAX_INDEXED_ACTIONS = 1000;
+const MAX_PER_ACTION = 500;
 
 export interface ObserverSink { onEvent?(e: Observation): void; onRequestDone?(r: RequestRecord): void }
 
+/** Bodies up to this size are hashed in full (the bytes are already in memory); a larger one has an unknown identity. */
+export const BODY_HASH_MAX = 8 * 1024 * 1024;
+
 /**
- * Same URL and same body, same key; it never leaves memory. A body Playwright cannot see (a file in a form, a blob) is
- * unknown, and an unknown body never equals another: two uploads of different files are not a double submit.
+ * The identity of a submission: method, URL and the hash of its body; it never leaves memory. A body Playwright cannot see
+ * (a file in a form, a blob) or one over BODY_HASH_MAX is unknown, and an unknown body never equals another: two uploads of
+ * different files are not a double submit, and two large bodies are never the same only because their lengths are.
+ * A request that carries an idempotency key is identified by that key ("idem:"): sending it again is a safe retry.
  */
 let unknownBodies = 0;
-function bodyKeyOf(req: Request): string {
-  const h = createHash('sha1').update(req.url());
+export function bodyKeyOf(req: { method(): string; url(): string; headers(): Record<string, string>; postDataBuffer(): Buffer | null }): string {
+  const h = createHash('sha1').update(req.method()).update(' ').update(req.url());
   try {
+    const headers = req.headers();
+    const idem = headers['idempotency-key'] ?? headers['x-idempotency-key'];
+    if (idem) return `idem:${h.update('\0').update(idem.slice(0, 200)).digest('hex').slice(0, 16)}`;
     const b = req.postDataBuffer();
-    if (!b) return req.headers()['content-type'] ? `unknown:${++unknownBodies}` : `${h.digest('hex').slice(0, 16)}:empty`;
-    if (b.length > 1024 * 1024) return `${h.digest('hex').slice(0, 16)}:len:${b.length}`;
+    if (!b) return headers['content-type'] ? `unknown:${++unknownBodies}` : `${h.digest('hex').slice(0, 16)}:empty`;
+    if (b.length > BODY_HASH_MAX) return `unknown:${++unknownBodies}`;
     return h.update(b).digest('hex').slice(0, 16);
   } catch { return `unknown:${++unknownBodies}`; }
 }
@@ -55,15 +66,27 @@ export class Observer {
   readonly firstParty = new Set<string>();
   readonly stats = { requests: 0, tracked: 0, firstParty: 0, thirdParty: 0, bodiesCaptured: 0, bodiesSkipped: 0, consoleErrors: 0, pageErrors: 0 };
   readonly sinks: ObserverSink[] = [];
-  /** a fingerprint of each submission's body (hash or length), never the body: kept out of the record and its exports */
+  /** a fingerprint of each submission (method, URL, body hash), never the body: kept out of the record and its exports */
   private bodyKeys = new WeakMap<RequestRecord, string>();
   bodyKey = (r: RequestRecord) => this.bodyKeys.get(r) ?? '';
+  // Indexes kept as requests arrive, so judging an action never scans the whole request history.
+  /** action id -> its first-party tracked requests (bounded per action and in number of actions) */
+  private byAction = new Map<string, RequestRecord[]>();
+  /** submission identity -> start time of its latest request: a later one with the same identity is a retry */
+  private lastSent = new Map<string, number>();
+  /** sanitized URL -> its latest request (images, documents): to tell a failed load from one the page could not show */
+  private byUrl = new Map<string, RequestRecord>();
   /** first-party fetch / XHR / document requests attributed to this action (ambiguous ones excluded) */
   requestsOf(actionId: string): RequestRecord[] {
-    const out: RequestRecord[] = [];
-    for (const r of this.requests.values()) if (r.association.actionId === actionId && r.firstParty && r.tracked) out.push(r);
-    return out;
+    return (this.byAction.get(actionId) ?? []).filter((r) => this.requests.get(r.id) === r);
   }
+  /** True when a request with the same submission identity started after this one (the page sent it again). */
+  sentAgain(r: RequestRecord): boolean {
+    const k = this.bodyKeys.get(r);
+    return !!k && !k.startsWith('unknown:') && (this.lastSent.get(k) ?? -1) > r.startedMs;
+  }
+  /** The latest request for this (sanitized) URL, while it is retained. */
+  latestFor(url: string): RequestRecord | undefined { return this.byUrl.get(url); }
   /** what is known about the environment (fastqa version, browser, device); goes into summaries and bug drafts */
   readonly environment: Record<string, unknown> = {};
   disposed = false;
@@ -138,11 +161,28 @@ export class Observer {
     };
     if (prev) prev.redirectedTo = rec.id;
     this.byReq.set(req, rec); this.requests.set(rec.id, rec);
+    this.byUrl.delete(rec.url); this.byUrl.set(rec.url, rec);
+    if (this.byUrl.size > MAX_REQUESTS) this.byUrl.delete(this.byUrl.keys().next().value as string);
     if (this.requests.size > MAX_REQUESTS) this.trimRequests();
     this.stats.requests++; if (firstParty) this.stats.firstParty++; else this.stats.thirdParty++;
     if (tracked) {
       this.stats.tracked++;
-      if (!/^(GET|HEAD|OPTIONS)$/.test(method)) this.bodyKeys.set(rec, bodyKeyOf(req));
+      if (firstParty && association.actionId) {
+        let list = this.byAction.get(association.actionId);
+        if (!list) {
+          list = []; this.byAction.set(association.actionId, list);
+          if (this.byAction.size > MAX_INDEXED_ACTIONS) this.byAction.delete(this.byAction.keys().next().value as string);
+        }
+        if (list.length < MAX_PER_ACTION) list.push(rec);
+      }
+      if (!/^(GET|HEAD|OPTIONS)$/.test(method)) {
+        const k = bodyKeyOf(req);
+        this.bodyKeys.set(rec, k);
+        if (!k.startsWith('unknown:')) {
+          this.lastSent.delete(k); this.lastSent.set(k, rec.startedMs);
+          if (this.lastSent.size > MAX_REQUESTS) this.lastSent.delete(this.lastSent.keys().next().value as string);
+        }
+      }
       rec.held = this.actions.hold(association);
       if (firstParty) this.pending.add(rec);
       const ev = this.emit('request', { requestId: rec.id, method, url: rec.url, resourceType, firstParty, navigation: navigation || undefined, redirectedFrom: prev?.id }, association, rec);
@@ -216,7 +256,10 @@ export class Observer {
   }
   private trimRequests() {
     let n = 500;
-    for (const [id, r] of this.requests) { if (n <= 0) break; if (r.done) { this.requests.delete(id); n--; } }
+    for (const [id, r] of this.requests) {
+      if (n <= 0) break;
+      if (r.done) { this.requests.delete(id); if (this.byUrl.get(r.url) === r) this.byUrl.delete(r.url); n--; }
+    }
   }
 
   // ------------------------------------------------------------------ payload capture (opt-in, scoped, bounded)

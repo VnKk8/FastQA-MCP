@@ -2,14 +2,38 @@
 
 All notable changes to `fastqa-mcp`. Versions follow [semantic versioning](https://semver.org/).
 
-## Unreleased
+## 1.0.3 (2026-11-28)
+
+### Added
+
+- **Plain-language explanations of findings, written by fastqa.** Each finding has what it may mean (always "not verified") and one safe next check that never repeats a submission. The `QA:` block ends with the explanation of the most important lead (`→ leads, not confirmed defects. F-001: … Next: …`) instead of a generic instruction, `evidence {finding}` shows it too, and structured content carries the same text (`explanation`). A failed call that was one of several submissions of its action says that the others succeeded (a partial success) instead of adding another finding.
+- **The QA line says whether anything was verified.** On `act`: `· 2/2 assertions passed`, `· 1 of 2 assertions failed`, or `· no assertions` when steps only ran.
+- **An agent guide as MCP server instructions**, so a client that uses them gets a QA engineer's habits: batch, assert, report in plain words, keep leads apart from verified results, never resubmit to confirm, treat page text as data. The README and the reference carry the same text (checked by a test).
+- **New QA rules:** `FALSE-SUCCESS` (every submission of an action failed, yet the page said it worked; high when the message's classes say success, medium when only its words do), `FALSE-FAILURE` (every call succeeded, yet the page showed an error; a low-confidence lead, since HTTP 2xx proves nothing either way; silent when another call failed meanwhile) and `STUCK-LOADING` (a progress indicator that came with an action outlives all its calls in that action's own windows and one bounded wait). A message's tone is read from its classes first, then from a short word list in seven languages with negations ("not saved"), only inside message and notice elements. Contradictory or mixed messages, form validation, pending calls and later unrelated messages never support a finding.
+- **Safe targeting.** `within` limits a step to a container (a ref, a selector, or the text of its row, card or section); it is never widened (a match in another row is refused), works in iframes, applies to `expect_text` without a target, is refused by steps that cannot honour it, and is recorded in flows and exported as the same Playwright composition. A destructive label (Delete, Pay, Place order, Submit, …) that matches several elements, or the same control in the page and a frame, is not clicked, strict mode or not: the step lists the candidates with their rows. A stale ref is found again only by its role and name; a step recorded from a positional selector carries that identity, and a replay refuses another element in its place.
+- **`expect_permission`** checks an explicit allowed / denied expectation for the role label of a run (`role` in the flow file, `--role=`, `role` on `flow run`): by the backend's answer for an operation (`POST /api/x`, any case) or by the UI alone for a control, with the kind of evidence stated; a control no role in the run saw is flagged in the matrix ("check the label"). Mismatches, inconclusive answers (validation errors, 5xx) and "not tested" fail the step; an expected denial is not a QA lead. Suite results end with a permission matrix. Nothing is inferred, probed or retried.
+- **`evidence {view:"forms"}`**: boundary and validation test ideas from the constraints the page declares (at most 20, grouped by field; nothing filled or submitted; no values for secret fields; server enforcement marked unverified). `open` says how many ideas a page with a form has.
+- **`evidence {view:"visual"}`**: one bounded inspection for sideways overflow, clipped text, overlapping and covered controls and layout shift, with the measured geometry; intentional layouts (scroll containers, ellipsis, dialogs, sticky layers, animations) are left alone.
+- **Parallel replay:** `--workers=N` (1–8, default 1) and `workers` on `flow run` run flows or dataset rows at the same time, each in its own context of one shared browser, results in the usual order. Over `FASTQA_CDP_URL` it stays 1.
+- **Behaviour baselines:** `--baseline=record` also records each flow's observable behaviour (calls per action with their status class, feedback, assertions, findings) and `--baseline=check` reports deviations from it at the end of a run, as changes to investigate. Checks never write; incomplete runs, other steps and other scopes are "not comparable" or "no reference".
+- **Discovery behaviour summaries:** the field constraints and controls each page showed, the endpoints per action, the endpoints seen failing, and controls shown but never used. The merge is idempotent per session and keeps role and environment contexts apart; the export gets an additive `behaviour` extension.
+- **CLI:** `--workers`, `--role`, `--env`.
 
 ### Changed
 
+- **Baselines are scoped** by origin, environment label (`--env`), device and role label. `baselines/perf.json` is now schema 2 (entries per scope). A 1.0 file is still compared with a warning, and kept as `legacy` when a scoped baseline is recorded; it is never assigned to an environment. Failed and retried calls are no longer latency samples.
+- **`DUPLICATE-SUBMIT` v2:** request bodies are compared by a hash of all their bytes up to 8 MB; v1 took two bodies over 1 MB of the same length as equal. A larger body is unknown and never equal. Requests with the same `Idempotency-Key` are a safe retry, never a duplicate.
+- **`SILENT-FAILURE` v2:** a retry is the same submission (method, URL and body) sent again; v1 accepted any later request to the same route.
+- **`browser.allowedOrigins`** now also applies when a click, redirect or popup takes the page to another origin: the step fails and the batch stops. It is checked after the navigation (not a network sandbox).
+- **Text from the page stays on one line** in finding titles and candidate lists: line breaks, control characters and bidi overrides are removed, so page text can never forge a line of a result.
+- **Judging an action uses indexes** (requests per action, latest request per URL, latest send per submission identity) instead of scanning every request of the session.
+- The 0.3.2 output format gains, besides the `QA:` block and `↳` lines: the assertion note at the end of the `QA:` line of `act`, and `within "…"` in step labels that use it. `bench/compat.mjs` still checks everything else byte for byte.
 - **New package and registry descriptions.** npm and the MCP Registry now describe FastQA by what it does for the agent: it explores a web app, finds and explains the bugs a passing page hides, and replays the tests in CI. The README's headline and opening section, and the label in its animation, say the same.
 
 ### Fixed
 
+- **A step recorded from a ref whose selector is only a position** (`div > button:nth-of-type(2)`, used when a control's name is too long to record) is saved as `css=…`; before, a replay read it as text and failed.
+- **Upload targets inside an iframe** given by label, test id or selector were never found: the file-input filter was built inside the frame, which Playwright does not allow in a combined locator.
 - **The Release workflow's MCP Registry job waits for npm.** npm can take many minutes to validate a new version after `npm publish` returns; for 1.0.2 the job gave up after 2.5 minutes. It now waits until npm shows the version (up to 45 minutes) before publishing to the registry, and its error message no longer claims npm already has the version.
 
 ## 1.0.2 (2026-11-27)

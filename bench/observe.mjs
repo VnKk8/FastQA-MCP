@@ -32,7 +32,8 @@ out = await call('act', { steps: [
   { do: 'expect_text', value: 'Added to cart: Blue T-shirt' }, { do: 'select', target: 'Currency', value: 'GBP' },
 ] });
 has('healthy batch: passes with the 0.3 layout', out, /^PASSED 8\/8 steps in \d+ms\n✓ fill "Email" "john@example.com"/, '--- navigated, new page ---', '✓ fill "Password" "•••"');
-has('healthy batch: one compact clean line', out, /\nQA: clean · \d+ requests observed$/);
+// since 1.1 the clean line also says whether anything was verified (additive suffix): " · 2/2 assertions passed"
+has('healthy batch: one compact clean line', out, /\nQA: clean · \d+ requests observed · 2\/2 assertions passed$/);
 lacks('healthy batch: no findings, no history dump', out, 'F-0', 'candidate', 'E-1');
 
 // --- 3. Delayed failure crossing an action: A starts the request, B runs, the 500 arrives during B.

@@ -89,6 +89,10 @@ export interface ActionRecord {
   ok?: boolean;
   inflight: number;   // requests attributed to this action that have no response yet
   requests: number;
+  /** what the person was told after it (success, error, validation, navigation, …), set when its batch is judged */
+  told?: string[];
+  /** the accessible name of the control a ref pointed at (the label only shows "e12") */
+  control?: string;
 }
 
 export interface BatchRecord {

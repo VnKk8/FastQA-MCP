@@ -4,7 +4,7 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { sessionHooks } from './session.js';
 import { BundleStream, streams, writeBundle, writeBugDraft, sessionsDir } from './evidence/bundle.js';
-import { loadBaseline, recordBaseline as record } from './quality/baseline.js';
+import { loadBaseline, recordBaseline as record, scopeKey, scopeOf, memoBaseline } from './quality/baseline.js';
 import { DiscoveryGraph, mergeDiscovery as merge, renderDiscovery } from './discovery/graph.js';
 import { loadContracts } from './contract/openapi.js';
 import { FLOW_DIR, writeAtomic } from './dirs.js';
@@ -31,10 +31,12 @@ export function installServices() {
         if (cfg.discovery.enabled) {
             const g = new DiscoveryGraph({
                 sessionId: obs.sessionId, pathTemplates: cfg.discovery.pathTemplates,
-                describeAction: (id) => { const a = obs.actions.get(id); return a ? { label: a.label, kind: a.do } : undefined; },
+                describeAction: (id) => { const a = obs.actions.get(id); return a ? { label: a.label, kind: a.do, ...(a.control ? { control: a.control } : {}) } : undefined; },
                 scopeOf: (b) => obs.actions.scopeOf(b),
                 batchKind: (b) => obs.actions.batches.find((x) => x.batchId === b)?.kind,
             });
+            if (s.role || s.options.env)
+                g.context = { role: s.role, env: s.options.env };
             graphs.set(obs, g);
             obs.sinks.push(g);
         }
@@ -50,8 +52,16 @@ export function installServices() {
             if (warnings.length)
                 obs.environment.contractWarnings = warnings;
         }
-        if (s.options.baseline === 'check' || cfg.performance?.baseline)
-            obs.quality.baseline = loadBaseline(cfg);
+        // labels the caller gave for this run (never inferred): they scope baselines and appear in bundles
+        if (s.role)
+            obs.environment.role = s.role;
+        if (s.options.env)
+            obs.environment.env = s.options.env;
+        if (s.options.baseline === 'check' || cfg.performance?.baseline) {
+            // the scope needs the application origin, known once the first page was opened: looked up at first use and again
+            // only when the scope changes; a scope without a baseline is said ("not evaluated"), never silently skipped
+            obs.quality.baseline = memoBaseline(() => scopeKey(scopeOf(obs)), (k) => loadBaseline(cfg, k), (k) => obs.quality.markNotEvaluated('PERF-BASELINE', `no response-time baseline recorded for ${k}`));
+        }
         // a session that ends (close, fresh context) leaves its bundle behind when artifacts are on
         s.onEnd = async (o) => { if ((cfg.artifacts.enabled || s.options.bundle) && !bundled.has(o))
             await exportBundle(o); };
@@ -66,6 +76,15 @@ export async function exportBundle(obs, extra = {}) {
 }
 export async function bugDraft(obs, findingId) {
     return writeBugDraft(obs, findingId, { environment: obs.environment });
+}
+/** Discovery only (opt-in): what a snapshot showed on a page, from lines fastqa already has. No page access. */
+export function noteSnapshot(obs, url, lines) {
+    const g = obs ? graphs.get(obs) : undefined;
+    if (g)
+        try {
+            g.noteSnapshot(obs.redactor.pageUrl(url), lines);
+        }
+        catch { /* discovery must never break a call */ }
 }
 export function discoveryView(obs, q) {
     const g = graphs.get(obs);

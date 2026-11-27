@@ -4,6 +4,8 @@ import type { Observer } from '../observation/observer.js';
 import type { Association, Finding, Severity } from '../observation/types.js';
 import { sevRank } from '../observation/types.js';
 import { byImportance, type PolicyOutcome } from './engine.js';
+import { explain, type Explanation } from './explain.js';
+import { partialSuccess } from './effects.js';
 
 export interface QualityBlock {
   /** clean = nothing found within the observed scope; it is not a statement about the whole system */
@@ -24,7 +26,12 @@ export interface QualityBlock {
   findings: Array<{
     id: string; ruleId: string; severity: Severity; confidence: Finding['confidence']; summary: string;
     association: Association; evidenceIds: string[]; occurrences: number; late?: boolean; again?: boolean;
+    /** the same plain-language explanation the text shows: relation to the action, possible impact, safe next check */
+    explanation?: Explanation;
+    requestIds?: string[];
   }>;
+  /** explicit assertions of this result (act only): passed / failed; absent when the result has none to report */
+  assertions?: { passed: number; failed: number };
 }
 
 const plural = (n: number, w: string) => `${n} ${w}${n === 1 ? '' : 's'}`;
@@ -39,7 +46,28 @@ export function findingLine(obs: Observer, f: Finding, again = false): string {
  * Builds the block for what was not shown yet. `final` = run finalization (CLI / flow run), where `pending` is the
  * number of requests the bounded drain was still waiting for (later traffic such as polling does not count).
  */
-export function summarize(obs: Observer, o: { requestsBefore?: number; final?: boolean; pending?: number } = {}): { block: QualityBlock; text: string; policy: PolicyOutcome; fresh: Finding[] } {
+/**
+ * The explanation of a finding in its session. Related symptoms are folded in instead of adding lines: when the failed
+ * call was one of several submissions of its action and others succeeded, that is said as a partial success.
+ */
+export function explainFinding(obs: Observer, f: Finding): Explanation {
+  const e = explain(f, (a) => obs.actions.describe(a));
+  const mixed = f.association.actionId && f.requestIds.length ? partialSuccess({ requests: obs.requestsOf(f.association.actionId) }) : undefined;
+  if (mixed && mixed.bad.some((r) => f.requestIds.includes(r.id))) {
+    e.impact += `; other calls of the same action succeeded (${mixed.ok.slice(0, 3).map((r) => `${r.method} ${r.route} ${r.status}`).join(', ')}): a partial success`;
+  }
+  return e;
+}
+
+/** " · 2/2 assertions passed", " · 1 of 3 assertions failed" or " · no assertions": steps that ran are not a verified result. */
+export function assertionNote(a?: { passed: number; failed: number }): string {
+  if (!a) return '';
+  const n = a.passed + a.failed;
+  if (!n) return ' · no assertions';
+  return a.failed ? ` · ${a.failed} of ${n} assertion${n === 1 ? '' : 's'} failed` : ` · ${a.passed}/${n} assertion${n === 1 ? '' : 's'} passed`;
+}
+
+export function summarize(obs: Observer, o: { requestsBefore?: number; final?: boolean; pending?: number; assertions?: { passed: number; failed: number } } = {}): { block: QualityBlock; text: string; policy: PolicyOutcome; fresh: Finding[] } {
   const live = obs.coverage();
   const pending = o.pending ?? live.pending;
   const state = live.state === 'disabled' ? 'disabled' : pending || live.dropped ? 'partial' : 'complete';
@@ -60,13 +88,16 @@ export function summarize(obs: Observer, o: { requestsBefore?: number; final?: b
   const policy = q.policy({ findings: o.final ? undefined : [...fresh, ...recurring], pending, dropped: live.dropped, final: !!o.final });
   const nNew = shown.filter((f) => !again.has(f.id)).length;
   const nAgain = shown.length - nNew;
+  const describe = (a: Association) => obs.actions.describe(a);
+  const why = new Map(inline.map((f) => [f.id, explainFinding(obs, f)] as const));
   const block: QualityBlock = {
     status: shown.length ? 'findings' : state === 'partial' ? 'partial' : 'clean',
     policyOutcome: policy.outcome, coverage: state,
     observedRequests: observed, pendingRequests: pending, droppedEvents: live.dropped,
     newCount: nNew, recurringCount: nAgain, highestSeverity: shown[0]?.severity, moreAvailable: shown.length > inline.length,
     infoCount: info, rulesNotEvaluated: q.notEvaluated.size,
-    findings: inline.map((f) => ({ id: f.id, ruleId: f.ruleId, severity: f.severity, confidence: f.confidence, summary: f.title, association: f.association, evidenceIds: f.evidenceIds.slice(-4), occurrences: f.occurrences, late: f.late, again: again.has(f.id) || undefined })),
+    findings: inline.map((f) => ({ id: f.id, ruleId: f.ruleId, severity: f.severity, confidence: f.confidence, summary: f.title, association: f.association, evidenceIds: f.evidenceIds.slice(-4), occurrences: f.occurrences, late: f.late, again: again.has(f.id) || undefined, explanation: why.get(f.id), requestIds: f.requestIds.slice(-4) })),
+    ...(o.assertions ? { assertions: o.assertions } : {}),
   };
 
   const tail: string[] = [`${plural(observed, 'request')} observed`];
@@ -75,14 +106,19 @@ export function summarize(obs: Observer, o: { requestsBefore?: number; final?: b
   if (q.notEvaluated.size) tail.push(`${plural(q.notEvaluated.size, 'rule')} not evaluated`);
   if (q.findingsDropped) tail.push(`${q.findingsDropped} findings over the limit not kept`);
   const lines: string[] = [];
+  const asserted = assertionNote(o.assertions);
   if (shown.length) {
     const what = [nNew ? plural(nNew, 'new candidate finding') : '', nAgain ? `${plural(nAgain, 'known finding')} seen again` : ''].filter(Boolean).join(', ');
-    lines.push(`QA: ${what} (highest ${shown[0].severity.toUpperCase()}) · ${tail.join(' · ')}`);
+    lines.push(`QA: ${what} (highest ${shown[0].severity.toUpperCase()}) · ${tail.join(' · ')}${asserted}`);
     for (const f of inline) lines.push('  ' + findingLine(obs, f, again.has(f.id)));
     if (block.moreAvailable) lines.push(`  +${shown.length - inline.length} more`);
-    lines.push('  → leads, not confirmed defects: check them with evidence {view:"findings"} before reporting success');
+    // one specific, safe next check for the most important lead, instead of a generic instruction
+    const top = inline[0] ? why.get(inline[0].id) : undefined;
+    lines.push(top
+      ? `  → leads, not confirmed defects. ${inline[0].id}: ${top.impact}. Next: ${top.next}`
+      : '  → leads, not confirmed defects: check them with evidence {view:"findings"} before reporting success');
   } else {
-    lines.push(`QA: ${state === 'partial' ? 'no findings so far' : 'clean'} · ${tail.join(' · ')}`);
+    lines.push(`QA: ${state === 'partial' ? 'no findings so far' : 'clean'} · ${tail.join(' · ')}${asserted}`);
   }
   if (policy.outcome === 'failed') lines.push(`QA policy (strict): FAILED — ${policy.reasons.join('; ')}`);
   else if (policy.outcome === 'provisional') lines.push(`QA policy (strict): provisional — ${policy.reasons.join('; ')}`);

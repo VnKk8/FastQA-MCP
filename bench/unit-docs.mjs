@@ -37,6 +37,15 @@ for (const file of ['README.md', 'docs/REFERENCE.md']) {
   });
 }
 
+// The agent guide is sent as MCP server instructions; clients may not show those, so the docs carry the same text.
+test('README and the reference carry the agent guide word for word (the same text as the server instructions)', async () => {
+  const { AGENT_GUIDE } = await import('../dist/guide.js');
+  for (const file of ['README.md', 'docs/REFERENCE.md']) {
+    const md = readFileSync(file, 'utf8').replace(/\r\n/g, '\n');
+    assert.ok(md.includes(AGENT_GUIDE), `${file} does not contain the agent guide of src/guide.ts`);
+  }
+});
+
 test('the duplicate-key check finds a repeated key and ignores the same key in sibling objects', () => {
   assert.deepEqual(duplicateKeys('{"a":1,"b":{"a":2},"a":3}'), ['a']);
   assert.deepEqual(duplicateKeys('{"x":{"k":1},"y":{"k":2},"z":[{"k":1},{"k":2}]}'), []);

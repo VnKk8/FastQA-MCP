@@ -193,15 +193,27 @@ const newDir = (p) => mkdtempSync(path.join(tmpdir(), p));
   let r = await cli(`run history --var=base=${base} --var=slow=60 --baseline=record --repeat=2`, env);
   has('baseline: too few samples are not recorded', r.stdout, /baseline: recorded 0 endpoints/, /skipped \(fewer than 5 samples; use --repeat\): GET \/api\/slow \(2\)/);
   r = await cli(`run history --var=base=${base} --var=slow=60 --baseline=record --repeat=5`, env);
-  has('baseline: recorded from 5 runs', `exit=${r.code}\n${r.stdout}`, 'exit=0', 'baseline: recorded 1 endpoint to', '5/5 passed');
+  // since 1.1 a baseline is scoped: origin, environment label, device, role label (schema 2)
+  const scope = `${base} | env unknown | desktop | role unknown`;
+  has('baseline: recorded from 5 runs, for its scope', `exit=${r.code}\n${r.stdout}`, 'exit=0', `baseline: recorded 1 endpoint for ${scope} to`, '5/5 passed');
   const file = JSON.parse(readFileSync(path.join(dir, 'baselines', 'perf.json'), 'utf8'));
-  check('baseline file: median and p95 per endpoint, with its environment', file.entries['GET /api/slow']?.samples === 5 && file.entries['GET /api/slow'].medianMs >= 50 && /node/.test(file.environment), JSON.stringify(file));
+  const e = file.scopes?.[scope]?.entries['GET /api/slow'];
+  check('baseline file: median and p95 per endpoint, per scope, with the machine', file.schemaVersion === 2 && e?.samples === 5 && e.medianMs >= 50 && /node/.test(file.scopes[scope].machine), JSON.stringify(file));
   r = await cli(`run history --var=base=${base} --var=slow=60 --baseline=check`, env);
   lacks('baseline check: a normal run is clean', r.stdout, 'PERF-BASELINE');
   r = await cli(`run history --var=base=${base} --var=slow=900 --baseline=check`, env);
   has('baseline check: a much slower response is a low candidate with both numbers', r.stdout, /LOW PERF-BASELINE GET \/api\/slow took \d+ms, baseline median \d+ms/);
+  r = await cli(`run history --var=base=${base} --var=slow=900 --baseline=check --env=prod`, env);
+  lacks('baseline check: another environment label is another scope, never compared', r.stdout, 'PERF-BASELINE');
   r = await cli(`run history --var=base=${base} --var=slow=900`, env);
   lacks('baseline is only compared when asked', r.stdout, 'PERF-BASELINE');
+  // migration: a 1.0 file (schema 1, no scope) is still compared, with a warning; recording keeps it as "legacy"
+  writeFileSync(path.join(dir, 'baselines', 'perf.json'), JSON.stringify({ schemaVersion: 1, recordedAt: '2026-11-01T00:00:00.000Z', environment: 'win32 x64 node v24', note: 'old', entries: { 'GET /api/slow': { samples: 5, medianMs: 60, p95Ms: 70 } } }));
+  r = await cli(`run history --var=base=${base} --var=slow=900 --baseline=check`, env);
+  has('legacy 1.0 baseline: still compared, with a warning that it has no scope', `${r.stdout}\n${r.stderr}`, /PERF-BASELINE GET \/api\/slow/, /recorded by 1\.0 without a scope/);
+  r = await cli(`run history --var=base=${base} --var=slow=60 --baseline=record --repeat=5`, env);
+  const migrated = JSON.parse(readFileSync(path.join(dir, 'baselines', 'perf.json'), 'utf8'));
+  check('legacy 1.0 baseline: kept as legacy, never assigned to an environment', migrated.schemaVersion === 2 && migrated.legacy?.entries['GET /api/slow']?.medianMs === 60 && !!migrated.scopes[scope], JSON.stringify(migrated));
 }
 
 // ---------------------------------------------------------------- 6. structured content is opt-in; mode off removes the QA line

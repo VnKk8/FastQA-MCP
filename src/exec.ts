@@ -8,7 +8,7 @@ import type { PolicyOutcome } from './quality/engine.js';
 import type { ActionRecord, Finding } from './observation/types.js';
 import type { SessionEvent } from './session.js';
 import { INTERACTIVE } from './correlation/actions.js';
-import { PROBED, failed, deadClick, silentFailures, type ActionEffects } from './quality/effects.js';
+import { PROBED, failed, deadClick, silentFailures, stuckLoading, toldOf, type ActionEffects, type Judging } from './quality/effects.js';
 import { mergeProbes, type ProbeData } from './probe.js';
 import { effectLine, eventText, FACT } from './facts.js';
 
@@ -78,6 +78,9 @@ export async function runBatch(session: Session, steps: Step[], o: BatchOptions)
       const pagesBefore = session.context?.pages().length ?? 0;
       if (probed) await drain(lastOwner, 'gap'); // what happened until now belongs to the previous action's gap
       const action = obs.actions.beginAction(step.do, labelOf(step), session.page ? obs.pageId(session.page) : undefined);
+      // a ref's label is only "e12": the control's name from the snapshot, known before any request of the action starts
+      const control = step.target && /^e\d+$/.test(step.target) ? session.hints.get(step.target)?.id?.name : undefined;
+      if (control) action.control = control;
       let stepOk = false;
       try {
         const r = await runStep(session, bind(step, o.vars ?? {}), step);
@@ -90,6 +93,12 @@ export async function runBatch(session: Session, steps: Step[], o: BatchOptions)
         if (r.ok && r.recorded) o.onRecorded?.(r.recorded);
         // the settle belongs to the action: requests it triggers are attributed while it runs
         if (r.ok && SETTLE_AFTER.test(step.do)) await session.settle(o.settleMs ?? 1500);
+        // browser.allowedOrigins: a click, redirect or popup that took the page elsewhere fails the step and stops the batch
+        const left = session.takeLeftOrigin();
+        if (left && stepOk) {
+          stepOk = false;
+          lines[lines.length - 1] = `${o.number ? `${String(i + 1).padStart(2)}. ` : ''}✗ ${labelOf(step)} — the page went to ${left}, outside browser.allowedOrigins; no further steps run (checked after the navigation: not a network sandbox)`;
+        }
         if (r.ok && INTERACTIVE.test(step.do)) {
           watched[i] = { action, probed, executedAt, endedAt: Date.now(), ...where(session, urlBefore, pagesBefore) };
           if (probed || step.do === 'goto') { await drain(i, 'own'); lastOwner = i; }
@@ -118,7 +127,17 @@ export async function runBatch(session: Session, steps: Step[], o: BatchOptions)
       if (late.length) events[lastOwner >= 0 ? lastOwner : events.length - 1]?.push(...late);
       all = judge(session, watched, windows, events);
     }
-    for (const e of all) if (e.action.do !== 'goto') try { obs.quality.onAction(e, obs.requests.values()); } catch { /* a rule must never break a run */ }
+    const j: Judging = {
+      sentAgain: (r) => obs.sentAgain(r), expected: (r) => obs.quality.isExpected(r),
+      // only asked when a FALSE-FAILURE is otherwise supported (rare): a bounded scan of the retained requests
+      failedSince: (ms) => { for (const r of obs.requests.values()) if (r.startedMs >= ms && r.firstParty && failed(r)) return true; return false; },
+    };
+    for (const e of all) {
+      // for behaviour signatures: from what was already judged, no page access. Probe data comes from the page: a page
+      // that tampers with it must never break a run.
+      try { e.action.told = toldOf(e); } catch { /* unreadable probe data: no feedback categories */ }
+      if (e.action.do !== 'goto') try { obs.quality.onAction(e, j); } catch { /* a rule must never break a run */ }
+    }
     // a failed call's reason comes from its body, when capture is on: give a body that is being read a moment
     const end = Date.now() + 200;
     while (all.some((e) => e.requests.some((r) => failed(r) && r.body?.state === 'pending')) && Date.now() < end) await sleep(20);
@@ -176,13 +195,21 @@ function judge(session: Session, watched: Array<Watched | undefined>, windows: P
       probe: ownAt >= 0 ? windows[ownAt].data : undefined,
       gap: mergeProbes(gaps.map((g) => g.data)),
       after: ownAt >= 0 ? mergeProbes(windows.slice(ownAt + 1).map((x) => x.data)) : undefined,
+      // the drain right before the action (what the page already showed) and the action's own latest one: an indicator a
+      // later action shows is never blamed on this one
+      before: ownAt > 0 && windows[ownAt - 1].kind === 'gap' ? windows[ownAt - 1].data : undefined,
+      last: gaps.length ? gaps[gaps.length - 1].data : undefined,
       watchedMs: Math.max(0, until - w.executedAt),
     });
   });
   return out;
 }
 
-const suspicious = (e: ActionEffects, obs: Observer) => e.action.do !== 'goto' && (deadClick(e) || silentFailures(e, obs.requests.values()).length > 0);
+const suspicious = (e: ActionEffects, obs: Observer) => {
+  try {
+    return e.action.do !== 'goto' && (deadClick(e) || silentFailures(e, (r) => obs.sentAgain(r)).length > 0 || stuckLoading(e).length > 0);
+  } catch { return false; } // probe data the page tampered with: no extra wait, no judgement
+};
 
 /** The ids of messages that went away in action i's own window or in the gap right after it. */
 function goneAfter(windows: ProbeWindow[], i: number): Set<string> {
@@ -196,12 +223,9 @@ function brokenImages(session: Session, action: ActionRecord | undefined, data?:
     let origin = ''; try { origin = new URL(src).origin; } catch { continue; }
     if (!obs.firstParty.has(origin)) continue;
     const url = obs.redactor.networkUrl(src);
+    // the latest request for this URL, from the observer's index, and the redirects it led to
     let failedLoad = false;
-    for (const r of obs.requests.values()) {
-      if (r.url !== url) continue;
-      for (let x: typeof r | undefined = r, n = 0; x && n < 10; x = x.redirectedTo ? obs.requests.get(x.redirectedTo) : undefined, n++) if (failed(x)) failedLoad = true;
-      if (failedLoad) break;
-    }
+    for (let x = obs.latestFor(url), n = 0; x && n < 10 && !failedLoad; x = x.redirectedTo ? obs.requests.get(x.redirectedTo) : undefined, n++) if (failed(x)) failedLoad = true;
     if (!failedLoad) obs.quality.brokenImage(url, action ? { actionId: action.actionId, confidence: 'inferred', reason: 'the image failed while the action ran and settled' } : { confidence: 'unattributed', reason: 'no action in progress' });
   }
 }
@@ -226,10 +250,13 @@ async function runStateChecks(session: Session) {
 
 export interface QualityResult { block: QualityBlock; text: string; policy: PolicyOutcome; fresh: Finding[] }
 
-/** The quality section for a tool result: findings not shown yet (including late ones from earlier batches). */
-export function qualityOf(obs: Observer | undefined, requestsBefore = 0): QualityResult | undefined {
+/**
+ * The quality section for a tool result: findings not shown yet (including late ones from earlier batches).
+ * `assertions` (act results): the QA line also says whether anything was verified, so a run of steps is never read as a test.
+ */
+export function qualityOf(obs: Observer | undefined, requestsBefore = 0, assertions?: { passed: number; failed: number }): QualityResult | undefined {
   if (!obs || !obs.quality.enabled) return undefined;
-  return summarize(obs, { requestsBefore });
+  return summarize(obs, { requestsBefore, assertions });
 }
 
 /**

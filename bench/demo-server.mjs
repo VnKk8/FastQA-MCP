@@ -3,6 +3,7 @@ import http from 'node:http';
 import { cookiePage } from './cookie-pages.mjs';
 import { uploadPage, multipartFiles } from './upload-pages.mjs';
 import { factsPage, factsApi } from './facts-pages.mjs';
+import { intelPage, intelApi } from './intel-pages.mjs';
 
 const page = (title, body) => `<!doctype html><html><head><meta charset="utf-8"><title>${title}</title>
 <style>body{font-family:sans-serif;max-width:720px;margin:40px auto}label{display:block;margin:8px 0}
@@ -216,6 +217,10 @@ export function start(port = 0) {
     if (uploadFixture) return send(200, 'text/html', uploadFixture);
     const factsFixture = factsPage(pathname);
     if (factsFixture) return send(200, 'text/html', factsFixture);
+    const intelFixture = intelPage(pathname);
+    if (intelFixture) return send(200, 'text/html', intelFixture);
+    const intelRoute = intelApi(pathname, (req.url ?? '').split('?')[1] ?? '');
+    if (intelRoute) return send(...intelRoute);
     if (pathname === '/img/redir') { res.writeHead(302, { location: '/img/missing.png' }); return void res.end(); }
     const factsRoute = factsApi(pathname);
     if (factsRoute) return send(...factsRoute);

@@ -107,12 +107,12 @@ function lev(a: string, b: string): number {
 
 export interface PageFacts { forms: number; fields: number; required: number; botCheck?: string; captcha: boolean }
 
-/** The one line about a page that open adds, or '' when there is nothing to say. */
-export function pageLine(f?: PageFacts): string {
+/** The one line about a page that open adds, or '' when there is nothing to say. `ideas`: form test ideas available. */
+export function pageLine(f?: PageFacts, ideas = 0): string {
   if (!f) return '';
   if (f.botCheck) return `\n↳ bot check: this is not the site's own page (${q(f.botCheck)}). fastqa does not try to get past it`;
   const parts: string[] = [];
-  if (f.forms) parts.push(`${f.forms} form${f.forms === 1 ? '' : 's'}, ${f.fields} field${f.fields === 1 ? '' : 's'} (${f.required} required)`);
+  if (f.forms) parts.push(`${f.forms} form${f.forms === 1 ? '' : 's'}, ${f.fields} field${f.fields === 1 ? '' : 's'} (${f.required} required)${ideas ? `, ${ideas} test idea${ideas === 1 ? '' : 's'} in evidence view "forms"` : ''}`);
   if (f.captcha) parts.push('a captcha is shown (fastqa does not solve it)');
   return parts.length ? `\n↳ page: ${parts.join(' · ')}` : '';
 }

@@ -19,7 +19,7 @@ const sh = (cmd, cwd, env = {}) => execSync(cmd, { cwd, encoding: 'utf8', stdio:
 const packed = JSON.parse(sh(`npm pack --json --pack-destination "${work}"`))[0];
 const files = packed.files.map((f) => f.path);
 check('tarball: only dist/, README.md, LICENSE and package.json', files.every((f) => f.startsWith('dist/') || ['README.md', 'LICENSE', 'package.json'].includes(f)), files.filter((f) => !f.startsWith('dist/')).join(', '));
-for (const need of ['dist/index.js', 'dist/ordering.js', 'dist/cookies.js', 'dist/upload.js', 'dist/exec.js', 'dist/config.js', 'dist/observation/observer.js', 'dist/correlation/actions.js', 'dist/quality/engine.js', 'dist/privacy/redact.js', 'dist/evidence/bundle.js', 'dist/discovery/graph.js', 'dist/contract/openapi.js', 'README.md', 'LICENSE'])
+for (const need of ['dist/index.js', 'dist/ordering.js', 'dist/cookies.js', 'dist/upload.js', 'dist/exec.js', 'dist/config.js', 'dist/observation/observer.js', 'dist/correlation/actions.js', 'dist/quality/engine.js', 'dist/privacy/redact.js', 'dist/evidence/bundle.js', 'dist/discovery/graph.js', 'dist/contract/openapi.js', 'dist/quality/explain.js', 'dist/permissions.js', 'dist/forms.js', 'dist/visual.js', 'dist/guide.js', 'dist/util/text.js', 'README.md', 'LICENSE'])
   check(`tarball contains ${need}`, files.includes(need));
 check('tarball: no sources, tests, docs or local data', !files.some((f) => /^(src|bench|docs|\.fastqa|\.github|\.claude)\//.test(f)));
 console.log(`     ${packed.filename}: ${files.length} files, ${(packed.size / 1024).toFixed(1)} kB packed, ${(packed.unpackedSize / 1024).toFixed(1)} kB unpacked`);
