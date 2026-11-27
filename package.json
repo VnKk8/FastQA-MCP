@@ -1,6 +1,6 @@
 {
   "name": "fastqa-mcp",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "mcpName": "io.github.VnKk8/fastqa-mcp",
   "description": "An MCP tool that turns your AI agent into a QA tester: it explores your web app, finds the bugs a passing page hides (silent failures, double submits, dead clicks, broken images), explains each with evidence, and replays what it tested in CI without a model.",
   "repository": {
