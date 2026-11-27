@@ -2,7 +2,7 @@ import { sevRank } from '../observation/types.js';
 const plural = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`;
 export function findingLine(obs, f) {
     const where = `${f.late ? 'late · ' : ''}${obs.actions.describe(f.association)}`;
-    const title = f.title.length > 110 ? f.title.slice(0, 109) + '…' : f.title;
+    const title = f.title.length > 160 ? f.title.slice(0, 159) + '…' : f.title;
     return `${f.id} ${f.severity.toUpperCase()} ${f.ruleId} ${title} — ${where} — ${f.evidenceIds.slice(0, 2).join(',') || 'no event retained'}${f.occurrences > 1 ? ` ×${f.occurrences}` : ''}`;
 }
 /** Builds the block for the findings that were not shown yet. `final` = run finalization (CLI / flow run). */

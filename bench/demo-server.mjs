@@ -20,7 +20,8 @@ const login = page('Login – DemoShop', `
 document.getElementById('f').onsubmit = async (e) => {
   e.preventDefault();
   const r = await fetch('/api/login', {method:'POST', body: JSON.stringify({email: email.value, pw: pw.value})});
-  if (r.ok) location.href = '/account'; else document.getElementById('err').textContent = 'Invalid email or password';
+  // ?echo=1 simulates an app that leaks what was typed into its error message (privacy tests)
+  if (r.ok) location.href = '/account'; else document.getElementById('err').textContent = 'Invalid email or password' + (new URLSearchParams(location.search).get('echo') ? ' (you typed ' + pw.value + ')' : '');
 };
 </script>`);
 
@@ -137,7 +138,7 @@ $('place').onclick = async () => {
   if (P.get('canary') === '1') {
     fetch('/api/track?token=${CANARY.token}&email=${CANARY.email}&page=2', { headers: { Authorization: 'Bearer ${CANARY.bearer}' } }).catch(() => {});
     fetch('/api/profile').then((x) => x.json()).catch(() => {});
-    console.error('auth rejected for token ${CANARY.token}');
+    console.error('<img src=x onerror=alert(1)> auth rejected for token ${CANARY.token}');
   }
 };
 $('stock').onclick = async () => { const r = await fetch('/api/stock' + (P.get('stock') === 'fail' ? '?fail=1' : '')); $('stockMsg').textContent = r.ok ? 'In stock' : 'Stock unknown'; };
@@ -189,9 +190,10 @@ export function start(port = 0) {
     const body = await new Promise((r) => { let d = ''; req.on('data', (c) => (d += c)); req.on('end', () => r(d)); });
     const send = (code, type, data, delay = 0) => setTimeout(() => { res.writeHead(code, { 'content-type': type }); res.end(data); }, delay);
     if (faultApi(req, res, body)) return;
-    if (req.url === '/' || req.url === '/login') return send(200, 'text/html', login);
-    if (req.url === '/account') return send(200, 'text/html', account);
-    if (req.url === '/checkout') return send(200, 'text/html', checkout(srv.address().port));
+    const pathname = (req.url ?? '').split('?')[0];
+    if (pathname === '/' || pathname === '/login') return send(200, 'text/html', login);
+    if (pathname === '/account') return send(200, 'text/html', account);
+    if (pathname === '/checkout') return send(200, 'text/html', checkout(srv.address().port));
     if (req.url === '/pay-frame') return send(200, 'text/html', payFrame);
     if (req.url?.startsWith('/3ds')) return send(200, 'text/html', tds);
     if (req.url === '/api/login') {

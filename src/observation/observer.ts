@@ -40,6 +40,8 @@ export class Observer {
   readonly firstParty = new Set<string>();
   readonly stats = { requests: 0, tracked: 0, firstParty: 0, thirdParty: 0, bodiesCaptured: 0, bodiesSkipped: 0, consoleErrors: 0, pageErrors: 0 };
   readonly sinks: ObserverSink[] = [];
+  /** what is known about the environment (fastqa version, browser, device); goes into summaries and bug drafts */
+  readonly environment: Record<string, unknown> = {};
   disposed = false;
   endedAt?: Date;
 
@@ -259,7 +261,10 @@ export class Observer {
     if (this.disposed || frame !== page.mainFrame()) return;
     const pageId = this.pageId(page);
     this.lastNav.set(pageId, this.now());
-    this.emit('state_change', { type: 'navigation', url: this.redactor.pageUrl(frame.url()) }, this.actions.associateMoment(), { pageId });
+    const cur = this.actions.current;
+    // the navigation a goto asked for is a known link, everything else is temporal
+    const assoc: Association = cur?.do === 'goto' ? { actionId: cur.actionId, confidence: 'direct', reason: 'navigation requested by the action' } : this.actions.associateMoment();
+    this.emit('state_change', { type: 'navigation', url: this.redactor.pageUrl(frame.url()) }, assoc, { pageId });
   }
 
   onPage(page: Page, type: 'page_opened' | 'page_closed') {

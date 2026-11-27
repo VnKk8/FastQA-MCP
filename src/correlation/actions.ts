@@ -27,6 +27,8 @@ export class ActionTracker {
   private nBatch = 0; private nAction = 0;
   /** endpoint key -> number of starts that no action could explain */
   private background = new Map<string, number>();
+  /** endpoint key -> its latest start times, to recognise periodic traffic (polling) */
+  private starts = new Map<string, number[]>();
   private navigationClaimed = false;
 
   constructor(private windowMs: number, private now: () => number) {}
@@ -71,6 +73,7 @@ export class ActionTracker {
       if (now - a.endedMs > this.windowMs) break;
       recent.push(a);
     }
+    const every = this.periodic(o.endpointKey, now);
     const primary = cur ?? recent[0];
     if (!primary) {
       this.background.set(o.endpointKey, (this.background.get(o.endpointKey) ?? 0) + 1);
@@ -78,10 +81,11 @@ export class ActionTracker {
     }
     const bg = this.background.get(o.endpointKey) ?? 0;
     const competing = recent.filter((a) => a !== primary && a.inflight > 0);
-    if (bg >= 2 || competing.length) {
+    if (bg >= 2 || every || competing.length) {
       const ids = [primary, ...competing].map((a) => a.actionId);
       const reason = bg >= 2
         ? `endpoint also fires as background traffic (${bg} earlier starts without an action)`
+        : every ? `endpoint fires periodically (about every ${every}ms): likely background traffic`
         : `${competing.map((a) => a.actionId).join(', ')} still had requests in flight when this one started`;
       primary.requests++;
       return { candidateActionIds: ids, confidence: 'ambiguous', reason };
@@ -89,6 +93,21 @@ export class ActionTracker {
     const reason = primary === cur ? 'request started during the action' : `request started ${Math.round(now - primary.endedMs!)}ms after the action ended`;
     primary.requests++;
     return { actionId: primary.actionId, confidence: 'inferred', reason };
+  }
+
+  /**
+   * Polling starts at a steady rhythm no matter what the user does. Four starts of one endpoint at near-constant
+   * intervals mark it as periodic; from then on its starts are not blamed on whichever action happens to run.
+   * Returns the interval in ms, or 0.
+   */
+  private periodic(key: string, now: number): number {
+    let t = this.starts.get(key);
+    if (!t) { if (this.starts.size >= 500) return 0; this.starts.set(key, (t = [])); }
+    t.push(now); if (t.length > 4) t.shift();
+    if (t.length < 4) return 0;
+    const gaps = [t[1] - t[0], t[2] - t[1], t[3] - t[2]];
+    const mean = (gaps[0] + gaps[1] + gaps[2]) / 3;
+    return mean >= 80 && gaps.every((g) => Math.abs(g - mean) <= mean * 0.3) ? Math.round(mean) : 0;
   }
 
   /** A request attributed to one action is in flight. Returns true when the action was found, so the caller can release it later. */

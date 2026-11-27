@@ -42,7 +42,13 @@ export interface Evidence {
 }
 
 const env = process.env;
-let warnedTls = false; // once per process
+let warnedTls = false;
+/** Told once per process, and only when an HTTPS site is actually opened with the 0.3 default still in effect. */
+export function warnLegacyTls() {
+  if (warnedTls) return;
+  warnedTls = true;
+  console.error('fastqa: invalid HTTPS certificates are accepted (0.3 default). Add .fastqa/config.json to be secure by default, or set FASTQA_IGNORE_HTTPS_ERRORS.');
+}
 export const DEFAULT_TIMEOUT = Number(env.FASTQA_TIMEOUT_MS || 5000);
 
 /** Services that attach to every new session (artifacts, discovery, contracts) register here; keeps this module free of them. */
@@ -71,6 +77,8 @@ export class Session {
   cfg!: Config;
   /** explicit run option (CLI --mode, flow run mode); overrides the config file */
   mode?: Mode;
+  /** per-run options that services read (CLI --bundle, --baseline) */
+  options: { bundle?: boolean; baseline?: 'record' | 'check' } = {};
   /** called when a session ends (context closed), before the observer is replaced */
   onEnd?: (obs: Observer) => Promise<void> | void;
   /** counts main-frame navigations: a ref issued on an older document is stale */
@@ -92,10 +100,6 @@ export class Session {
       this.cfg = loadConfig(FLOW_DIR(), this.mode);
       redactor.configure(this.cfg.privacy);
       for (const [k, v] of Object.entries(env)) if (k.startsWith('FASTQA_VAR_') && v && redactor.isSecretVar(k.slice(11))) redactor.addSecret(v, k.slice(11));
-      if (this.cfg.browser.legacyTls && !warnedTls) {
-        warnedTls = true;
-        console.error('fastqa: invalid HTTPS certificates are accepted (0.3 default). Add .fastqa/config.json to be secure by default, or set FASTQA_IGNORE_HTTPS_ERRORS.');
-      }
       for (const w of this.cfg.warnings) console.error(`fastqa: config: ${w}`);
     }
     if (!this.browser) this.browser = await launch();
@@ -107,6 +111,8 @@ export class Session {
         : await this.browser.newContext(this.device ? { ...deviceProfile(this.device), ...tls } : { viewport: { width: w, height: h }, ...tls });
       this.context.setDefaultTimeout(DEFAULT_TIMEOUT);
       this.obs = new Observer(this.cfg, redactor);
+      this.obs.environment.browser = `chromium ${this.browser.version()}`;
+      if (this.device) this.obs.environment.device = this.device;
       for (const h of sessionHooks.created) h(this);
       this.attachContext(this.context);
     }

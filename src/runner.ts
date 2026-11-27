@@ -1,5 +1,5 @@
 import { auditA11y } from './a11y.js';
-import { Session, DEFAULT_TIMEOUT, sleep, AmbiguousTargetError, type Step, type RecordedStep } from './session.js';
+import { Session, DEFAULT_TIMEOUT, sleep, AmbiguousTargetError, warnLegacyTls, type Step, type RecordedStep } from './session.js';
 import { redactor } from './privacy/redact.js';
 
 export const STEP_KINDS = [
@@ -60,6 +60,7 @@ export async function runStep(session: Session, s: Step, tmpl?: Step): Promise<S
           let o = ''; try { o = new URL(url).origin; } catch { /* reported by goto */ }
           if (o && !allowed.includes(o)) throw new Error(`origin ${o} is not in browser.allowedOrigins (${allowed.join(', ')})`);
         }
+        if (session.cfg?.browser.legacyTls && /^https:/i.test(url)) warnLegacyTls();
         session.obs?.noteFirstParty(url); // what the agent explicitly opens is first party
         try { await page.goto(url, { waitUntil: 'domcontentloaded', timeout: Math.max(timeout, 15000) }); }
         catch (e: any) {

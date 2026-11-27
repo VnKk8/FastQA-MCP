@@ -4,6 +4,7 @@ import { Session, type RecordedStep } from './session.js';
 import { runBatch, finalize } from './exec.js';
 import { FLOW_DIR, safe, rel, writeAtomic } from './dirs.js';
 import { redactor } from './privacy/redact.js';
+import { exportBundle } from './services.js';
 import type { Mode } from './config.js';
 import type { Observer } from './observation/observer.js';
 import type { Finding } from './observation/types.js';
@@ -64,6 +65,7 @@ export async function runFlow(name: string, vars: Record<string, string> = {}, s
   const s = new Session();
   s.mode = opts.mode ?? shared?.mode;
   if (shared?.browser) s.browser = shared.browser; // reuse the running browser process, new context
+  s.options = { bundle: opts.bundle, baseline: opts.baseline };
   opts.onSession?.(s);
   const t0 = Date.now();
   const started = new Date().toISOString();
@@ -107,6 +109,12 @@ export async function runFlow(name: string, vars: Record<string, string> = {}, s
     const { findingLine } = await import('./quality/summary.js');
     run.findingLines = findings.filter((f) => f.status === 'candidate').map((f) => findingLine(obs, f));
     recentRuns.push(obs); if (recentRuns.length > 5) recentRuns.shift();
+    if (opts.bundle || s.cfg?.artifacts.enabled) {
+      try {
+        const dir = await exportBundle(obs, { flow: safe(name), execution: { status: stepsOk ? 'passed' : 'failed', steps: flow.steps.length, failedAt }, policy: q ? { outcome: q.policy.outcome, reasons: q.policy.reasons } : undefined, screenshot: shotFile ? rel(shotFile) : undefined });
+        run.bundle = rel(dir);
+      } catch (e) { console.error(`fastqa: could not write the session bundle: ${String(e).split('\n')[0]}`); }
+    }
     try { await opts.onDone?.(obs, run); } catch (e) { console.error(`fastqa: could not write session artifacts: ${String(e).split('\n')[0]}`); }
   }
   if (shared?.browser) await s.closeContext(); else await s.close();

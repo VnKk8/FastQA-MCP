@@ -102,7 +102,8 @@ export class QualityEngine {
         title: `${rec.method} ${rec.route} returned ${st}`, actual: `HTTP ${st}`, expected: 'no client error, unless this is a negative test',
       });
     }
-    if (this.contract && rec.tracked && rec.resourceType !== 'document') this.contractIssues(this.contract.checkResponse(rec), rec, ev);
+    // a server error is already NET-5XX; reporting "500 is not documented" on top would only be noise
+    if (this.contract && rec.tracked && rec.resourceType !== 'document' && st < 500) this.contractIssues(this.contract.checkResponse(rec), rec, ev);
     for (const r of this.cfg.stateRules) {
       if (!endpointMatches(r.after, rec.method, rec.path) || (r.after.status !== undefined ? r.after.status !== st : st >= 400)) continue;
       if (this.stateChecks.length < 20) this.stateChecks.push({ ruleId: r.id, rec, expectText: r.expectText, expectNoText: r.expectNoText, withinMs: r.withinMs ?? 2000, severity: r.severity ?? 'medium' });
@@ -229,6 +230,9 @@ export class QualityEngine {
       for (const id of evIds) if (!f.evidenceIds.includes(id)) f.evidenceIds.push(id);
       if (f.evidenceIds.length > 12) f.evidenceIds.splice(4, f.evidenceIds.length - 12); // keep the first and the latest samples
       if (rec && !f.requestIds.includes(rec.id)) { f.requestIds.push(rec.id); if (f.requestIds.length > 12) f.requestIds.splice(4, 1); }
+      // a later occurrence without a clear action (background, ambiguous) lowers the confidence of the whole finding
+      const conf = d.confidence ?? confidenceOf(d.association);
+      if (confRank[conf] < confRank[f.confidence]) { f.confidence = conf; f.association = d.association; }
       if (policy.status === 'expected') f.expectedOccurrences++;
       if (policy.status === 'suppressed') { f.status = 'suppressed'; f.statusReason = policy.reason; }
       else this.restatus(f, policy.reason);
