@@ -2,6 +2,16 @@
 
 All notable changes to `fastqa-mcp`. Versions follow [semantic versioning](https://semver.org/).
 
+## Unreleased
+
+### Added
+
+- **File uploads.** `act` has an `upload` step that chooses files for a file input. The value names the files: `"photo.png"` makes a small valid PNG, `"big.jpg:6MB"` or `"edge.png:5242881"` makes a file of exactly that size, `"virus.exe"` makes filler bytes, `"a.png|b.pdf"` chooses several files and `""` clears the selection. Made images, PDFs and text files stay valid files of their type at every size, so a size limit test fails on the size and not on a broken file. Your own files come from `.fastqa/files/` as `"files/<name>"`; no other path on disk can be uploaded. The target can be the input's label, a hidden input, a styled "Upload" button or a drop zone that opens the file picker, or nothing when the page has one file input. The result gives each file's exact size and says when a file is outside the input's `accept` list. A disabled file input fails the step, as it would for a person, although the browser itself would take the files. Uploads are recorded in flows, replayed with the same bytes and exported to Playwright specs as code. File contents never appear in results, evidence or saved flows. The step costs about 40 more tokens of tool definitions (about 1,920 in total).
+
+### Changed
+
+- **The snapshot shows file inputs as `file`**, not `textbox`, with the chosen file names, the accepted types, and `[hidden]` for hidden inputs, which are now listed too (at most 5 per frame; the rest are counted in one line). `fill` on a file input fails with a message that points to `upload` instead of Playwright's "Input of type file cannot be filled".
+
 ## 1.0.1 (2026-11-27)
 
 ### Added

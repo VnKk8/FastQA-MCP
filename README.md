@@ -361,7 +361,7 @@ The repository's benchmark runs the same login, cart and currency journey on the
 |---|---:|---:|
 | Tool calls / model turns | 10 | **2** |
 | Returned tokens (approx.) | 1,270 | **330** |
-| Tool schema tokens (approx.) | 5,300 | **1,880** |
+| Tool schema tokens (approx.) | 5,300 | **1,920** |
 | Browser-side time, one run | 3.1 s | **2.5 s** |
 | Estimated end-to-end at 3 s per model turn | ~33 s | **~8.5 s** |
 | Replay of the saved flow | needs the model again | **1.4 s, no model** |
@@ -380,6 +380,7 @@ The observation layer added in 1.0 was measured against 0.3.2 on the same fixtur
 | Accessibility | Automated WCAG-oriented axe checks (not a complete accessibility audit) |
 | Mobile view | A supported emulated device |
 | Cookie banners | Accept or reject the banner while the page opens, so the test starts on the real page |
+| File uploads | Upload made test files of any type and exact size, or your own files from `.fastqa/files` |
 | Complex UI | Frames, nested frames and open shadow roots |
 | Data-driven runs | Replay a flow with CSV input |
 | Reporting | Failure screenshots, HTML and JUnit XML |
@@ -402,6 +403,21 @@ What you get:
 FastQA finds the button by the ids of common consent tools (OneTrust, Cookiebot, Didomi, Usercentrics, Google's consent message and others). For any other banner it reads the words on the buttons, in English, Bulgarian, German, French, Spanish, Italian, Dutch, Portuguese and Polish. Words only count inside a block that looks like a cookie banner, so an ordinary "Accept" button elsewhere on the page is not touched. Banners inside iframes and open shadow DOM are covered.
 
 No detection covers every site. If a banner is missed, click its button with a normal `click` step. Without `cookies` and without `FASTQA_COOKIES`, FastQA does not touch banners at all.
+
+### File uploads
+
+Many forms ask for a file: a profile picture, an ID scan, a CSV to import. The `upload` step chooses files for a file input, as a person does in the file picker. You can ask for it in normal words: "upload a 6 MB photo and check that the form refuses it".
+
+```json
+{ "do": "upload", "target": "Select picture", "value": "photo.png" }
+```
+
+- **Test files without preparing any.** A name is enough: `"photo.png"` gives a small valid PNG. Add a size to test limits: `"big.jpg:6MB"`, or `"edge.png:5242881"` for one byte over 5 MB. `"empty.pdf:0B"` is an empty file. Made files stay valid files of their type at any size (PNG, JPEG, GIF, WebP, PDF, TXT, CSV, JSON, SVG, XML, HTML), so a size test fails on the size and not on a broken file. Other extensions, such as `"virus.exe"`, get filler bytes, for checking that the site refuses them.
+- **Your own files.** Put them in `.fastqa/files/` and write `"files/contract.pdf"`. Nothing else on your disk can be uploaded: other paths are refused, so a page under test cannot talk the agent into uploading your keys or your `.env`.
+- **Several files, or none.** `"a.png|b.pdf"` chooses two files. `""` clears the selection.
+- **Any upload widget.** The target can be the input's label, a styled "Upload" button or a drop zone that opens the file picker. When the page has a single file input, the target can be left out. Hidden inputs work too; the snapshot lists them as `file … [hidden]`.
+
+The result names each file with its exact size, such as `✓ upload "Select picture" "big.jpg:6MB" — big.jpg (6291456 bytes = 6 MB, made)`. When a file is not in the input's `accept` list, the line says so: the site's own check is then what is being tested. The upload is recorded, so a saved flow makes the same files again on replay and an exported Playwright spec has the same step. File contents never appear in results, evidence or saved flows. See the [reference](docs/REFERENCE.md#file-uploads) for every option.
 
 ## Continuous QA
 
