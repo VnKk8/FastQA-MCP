@@ -429,3 +429,49 @@ test('tool calls are handed to the server one at a time, in arrival order', asyn
     assert.equal(r.value, 'closed'); assert.ok(r.ms < 1000, `took ${r.ms}ms`);
   });
 }
+
+// ------------------------------------------------------------------ report names
+// Parallel CI workers can share one FASTQA_DIR and finish in the same millisecond. Each run must keep its own report.
+{
+  const { writeReports } = await import('../dist/report.js');
+  const { mkdtempSync, readdirSync, readFileSync, writeFileSync, mkdirSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const path = (await import('node:path')).default;
+  const run = (name) => ({ name, ok: true, stepsOk: true, ms: 5, lines: [`✓ ${name}`], evidence: [], findingLines: [], findings: [] });
+  /** every new Date() in the callback reports the same instant, as two runs ending in the same millisecond would */
+  const sameInstant = async (fn) => {
+    const iso = Date.prototype.toISOString;
+    Date.prototype.toISOString = () => '2026-11-27T11:14:58.080Z';
+    try { return await fn(); } finally { Date.prototype.toISOString = iso; }
+  };
+  const stamped = (dir, ext) => readdirSync(path.join(dir, 'reports')).filter((f) => /^\d{4}-/.test(f) && f.endsWith(ext)).sort();
+
+  test('reports: runs that end in the same millisecond each keep their own report', async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'fq-reports-'));
+    const out = await sameInstant(() => Promise.all(['a', 'b', 'c'].map((n) => writeReports([run(n)], dir))));
+    assert.equal(new Set(out.map((o) => o.html)).size, 3, `three runs, three names: ${out.map((o) => path.basename(o.html)).join(', ')}`);
+    assert.equal(stamped(dir, '.html').length, 3, stamped(dir, '.html').join(', '));
+    assert.equal(stamped(dir, '.junit.xml').length, 3, stamped(dir, '.junit.xml').join(', '));
+    // each file holds the run it was written for, and its JUnit file has the same name
+    for (const [i, o] of out.entries()) {
+      assert.match(readFileSync(o.html, 'utf8'), new RegExp(`✓ ${'abc'[i]}`));
+      assert.equal(o.junit, o.html.replace(/\.html$/, '.junit.xml'));
+      assert.match(readFileSync(o.junit, 'utf8'), new RegExp(`name="${'abc'[i]}"`));
+    }
+  });
+  test('reports: a report another process already wrote under that name is never replaced', async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'fq-reports-'));
+    mkdirSync(path.join(dir, 'reports'));
+    writeFileSync(path.join(dir, 'reports', '2026-11-27T11-14-58-080Z.html'), 'written by another worker');
+    const o = await sameInstant(() => writeReports([run('mine')], dir));
+    assert.equal(readFileSync(path.join(dir, 'reports', '2026-11-27T11-14-58-080Z.html'), 'utf8'), 'written by another worker');
+    assert.notEqual(path.basename(o.html), '2026-11-27T11-14-58-080Z.html');
+  });
+  test('reports: the names given on a collision are still pruned by maxReports', async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'fq-reports-'));
+    await sameInstant(() => Promise.all(['a', 'b', 'c', 'd'].map((n) => writeReports([run(n)], dir, 2))));
+    await writeReports([run('newest')], dir, 2); // a later run prunes to the newest two
+    assert.equal(stamped(dir, '.html').length, 2, stamped(dir, '.html').join(', '));
+    assert.equal(stamped(dir, '.junit.xml').length, 2, stamped(dir, '.junit.xml').join(', '));
+  });
+}

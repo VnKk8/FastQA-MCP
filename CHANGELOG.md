@@ -11,6 +11,7 @@ All notable changes to `fastqa-mcp`. Versions follow [semantic versioning](https
 ### Fixed
 
 - **`close` no longer hangs on Windows.** Closing waited until the browser's temporary profile folder was deleted. On Windows that takes as long as another program (antivirus, indexer) holds a file in the folder, so the call could outlast the client's time limit although the browser had already closed. `close` now answers once the browser has exited and lets the cleanup finish in the background. If the browser has not exited after 10 seconds, the answer says so instead of waiting.
+- **Parallel replays no longer overwrite each other's report.** Two runs that finished in the same millisecond in one `.fastqa` folder (parallel CI workers) could both write `reports/<time>.html`, so one report was lost. The name is now claimed with an exclusive create, and a run that finds it taken adds its process id.
 - **A page that is still arriving no longer breaks the result.** When a site loaded a new document right after a step and only its head had arrived, the snapshot failed with `Cannot read properties of null`. FastQA now waits for the document.
 
 ## 1.0.0 (2026-11-27)
