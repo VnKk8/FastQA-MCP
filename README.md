@@ -11,13 +11,15 @@
 [![QA friendly](.github/badges/qa-friendly.svg)](#what-fastqa-can-test)
 [![license: MIT](https://img.shields.io/npm/l/fastqa-mcp.svg)](LICENSE)
 
-[Quick start](#quick-start) · [How it works](#how-it-works) · [Continuous QA](#continuous-qa) · [Benchmarks](#speed-by-design) · [CI](#from-ai-exploration-to-deterministic-ci) · [Reference](docs/REFERENCE.md)
+[Quick start](#quick-start) · [Not Playwright MCP](#not-playwright-mcp-and-not-the-playwright-command-line) · [How it works](#how-it-works) · [Continuous QA](#continuous-qa) · [Benchmarks](#speed-by-design) · [CI](#from-ai-exploration-to-deterministic-ci) · [Reference](docs/REFERENCE.md)
+
+<img src="docs/media/fastqa-demo.gif" width="960" alt="FastQA in 20 seconds: a whole test in one call; a failed call behind a passing page reported as a possible bug; the bug explained with what was expected, which click caused it and the evidence; facts such as field rules and why a step failed; 2 calls instead of 10, and the saved test replayed in CI without a model. Every line is real FastQA output.">
 
 </div>
 
 ---
 
-> **New in 1.0.** Continuous QA findings, evidence views, strict mode, session bundles, discovery and contract checks. The eight tools, saved flows and CLI exit codes work as they did in 0.3. Upgrading? Read the [changelog](CHANGELOG.md) for what changes in the output.
+> **New in 1.0.2.** File uploads, facts in every result so the agent needs fewer calls, and four new bug detectors: silent failures, double submits, dead clicks and broken images. See the [changelog](CHANGELOG.md).
 
 ## Browser automation with a QA mindset
 
@@ -33,6 +35,30 @@ FastQA is an open-source MCP server built on Playwright. It gives an AI agent fa
 - **Reproduce:** save flows, run them again without AI, and export Playwright tests.
 
 FastQA does not need its own LLM, cloud service or database. Bring any compatible MCP client and model. The model decides what to test; FastQA handles browser execution and observations.
+
+## Not Playwright MCP, and not the Playwright command line
+
+FastQA uses Playwright inside, so the names are easy to mix up. Here is what each one is, in plain words.
+
+- **Playwright** is a library from Microsoft that drives a real browser: it opens pages, clicks, types and reads the screen. FastQA uses it the way a car uses an engine. You never install it or call it yourself.
+- **The Playwright command line** (`npx playwright test`, `npx playwright codegen`) runs test files that a person writes and keeps as code. No AI takes part.
+- **Playwright MCP** (`@playwright/mcp`) is Microsoft's MCP server. It gives an AI agent general browser controls, one action per call. It is made for driving a browser; deciding whether what happened is right is left to the agent.
+- **FastQA MCP** is an MCP server made for testing. The agent sends a whole test in one call and gets back the result, the checks, and the possible bugs FastQA noticed on its own, each explained.
+
+| | Playwright command line | Playwright MCP | FastQA MCP |
+|---|---|---|---|
+| Who drives the browser | Test code a person writes | An AI agent, one action per call | An AI agent, a whole test per call |
+| Checks results | Yes, written in the code | The agent looks and judges | Yes: `expect_*` steps in the same call |
+| Finds bugs nobody asked about | No | The agent can ask for network and console logs and judge them itself | Yes: failed calls, JS errors, silent failures, double submits, dead clicks, broken images, each with its evidence |
+| Says what each action did | No | The agent takes a new snapshot to see | Yes: the calls it made, messages that came and went, a form the browser blocked, why a step failed |
+| Runs again without AI | It is code already | No | Yes: saved flows run in CI with JUnit and HTML reports |
+| Calls for the demo login-to-cart test | none (written as code) | 10 | 2 |
+
+Questions people ask:
+
+- **Do I have to install Playwright?** No. FastQA brings what it needs. It only needs a browser: Google Chrome or Microsoft Edge on your computer is enough, or run `npx playwright install chromium` once.
+- **Can I use them together?** Yes. A test the agent got working can be saved as a flow and exported as a Playwright test file (`flow export`), so it can join a test suite you keep with the Playwright command line.
+- **Is FastQA made by Microsoft?** No. It is an independent open-source project that uses Playwright, which is also open source.
 
 ## The bugs your screen doesn't show
 
