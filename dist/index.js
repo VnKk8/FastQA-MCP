@@ -6,6 +6,7 @@ import { Session } from './session.js';
 import { STEP_KINDS } from './runner.js';
 import { runBatch, qualityOf, structured } from './exec.js';
 import { saveFlow, loadFlow, listFlows, runSuite, exportFlow, recentRuns, FLOW_DIR } from './flows.js';
+import { pruneScreenshots } from './dirs.js';
 import { auditA11y, renderA11y } from './a11y.js';
 import { ConfigError, loadConfig, describeConfig } from './config.js';
 import { redactor } from './privacy/redact.js';
@@ -19,7 +20,7 @@ installServices();
 /** Every text result leaves through here: known secrets and credential patterns are removed at the boundary. */
 const text = (t, sc) => ({
     content: [{ type: 'text', text: redactor.text(t) }],
-    ...(sc && session.cfg?.structuredContent ? { structuredContent: JSON.parse(redactor.text(JSON.stringify(sc))) } : {}),
+    ...(sc && session.cfg?.structuredContent ? { structuredContent: redactor.deep(JSON.parse(JSON.stringify(sc))) } : {}),
 });
 const stripHash = (u) => u.split('#')[0];
 function evidenceSummary() {
@@ -113,6 +114,7 @@ server.registerTool('act', {
                 await fs.mkdir(path.dirname(f), { recursive: true });
                 await session.page.screenshot({ path: f, type: 'jpeg', quality: 60, mask: session.maskLocators() });
                 shot = `\nscreenshot saved: ${f}`;
+                await pruneScreenshots(session.cfg.artifacts.maxScreenshots).catch(() => { });
             }
             catch { /* ignore */ }
         }
@@ -283,7 +285,7 @@ server.registerTool('flow', {
                 return text(`Wrote ${file}${note}\n\n${code}`, { parity });
             }
             catch (e) {
-                return text(String(e?.message || e));
+                return { ...text(String(e?.message || e)), isError: true };
             }
         }
     }
@@ -354,7 +356,8 @@ async function cli(args) {
     }
     const many = Array.from({ length: repeat }, () => names).flat();
     const samples = [];
-    const { runs, html, junit } = await runSuite(many, vars, dataset, undefined, { mode, bundle, baseline, onDone: (o) => { samples.push(o); } });
+    const { runs, html, junit } = await runSuite(many, vars, dataset, undefined, { mode, bundle, baseline, onDone: (o) => { if (baseline === 'record')
+            samples.push(o); } });
     for (const r of runs) {
         console.log(redactor.text(`${r.ok ? 'PASS' : 'FAIL'} ${r.name} (${r.ms}ms)`));
         if (!r.ok)

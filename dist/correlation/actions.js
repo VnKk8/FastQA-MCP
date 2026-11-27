@@ -1,6 +1,8 @@
 /** Steps that drive the page. Assertions and waits are passive: they never count as the origin of a request. */
 export const INTERACTIVE = /^(goto|click|dblclick|hover|fill|type|press|select|check|uncheck)$/;
 const MAX_ACTIONS = 1000;
+/** A request that starts while the step itself executes, or this soon after it returned, is driven by that step. */
+const PROMPT_MS = 100;
 /**
  * Tracks batch and action scopes and decides, at the moment a request starts, which action it belongs to.
  * The decision is made once, at request start, and never changes when the response arrives:
@@ -8,10 +10,12 @@ const MAX_ACTIONS = 1000;
  *
  * Rules (temporal association only; this is not proof of causality):
  *  - the main-frame navigation an action explicitly asked for (goto / open)      -> direct
- *  - request starts while an interactive action runs                               -> inferred to it
- *  - request starts shortly after the latest interactive action ended (window)    -> inferred to it, delay stated
- *  - another recent action still has requests in flight, or the endpoint is also
- *    seen as background traffic                                                   -> ambiguous, candidates listed
+ *  - request starts while the step executes (or within 100 ms of its return)     -> inferred to it; never treated as
+ *    background, because that is exactly when a step's own requests start
+ *  - request starts later: during the settle phase of the action, or shortly
+ *    after the latest interactive action ended (window)                           -> inferred to it, delay stated,
+ *    unless the endpoint is known background or periodic traffic                   -> ambiguous
+ *  - another recent action still has requests in flight                          -> ambiguous, candidates listed
  *  - nothing recent                                                                -> unattributed
  */
 export class ActionTracker {
@@ -26,9 +30,11 @@ export class ActionTracker {
     nAction = 0;
     /** endpoint key -> number of starts that no action could explain */
     background = new Map();
-    /** endpoint key -> its latest start times, to recognise periodic traffic (polling) */
+    /** endpoint key -> its latest start times outside a step's own execution, to recognise periodic traffic (polling) */
     starts = new Map();
     navigationClaimed = false;
+    /** batches up to this number have had their result returned to the caller */
+    reportedN = 0;
     constructor(windowMs, now) {
         this.windowMs = windowMs;
         this.now = now;
@@ -43,6 +49,9 @@ export class ActionTracker {
     }
     endBatch(b, ok) { b.endedMs = this.now(); b.ok = ok; if (this.currentBatch === b)
         this.currentBatch = undefined; }
+    /** Call when a result that covers every ended batch is handed back. A finding that turns up afterwards is "late". */
+    markReported() { this.reportedN = this.currentBatch ? this.nBatch - 1 : this.nBatch; }
+    isReported(batchId) { return !!batchId && Number(batchId.slice(2)) <= this.reportedN; }
     beginAction(kind, label, pageId) {
         const b = this.currentBatch;
         const a = {
@@ -59,7 +68,9 @@ export class ActionTracker {
         this.navigationClaimed = false;
         return a;
     }
-    endAction(a, ok) { a.endedMs = this.now(); a.ok = ok; if (this.current === a)
+    /** The step itself has returned; the settle phase begins. */
+    executed(a) { a.executedMs = this.now(); }
+    endAction(a, ok) { a.endedMs = this.now(); a.executedMs ??= a.endedMs; a.ok = ok; if (this.current === a)
         this.current = undefined; }
     get(id) { return id ? this.byId.get(id) : undefined; }
     /** scope labels that policy rules can match: the batch scope (flow name or act scope) */
@@ -72,6 +83,8 @@ export class ActionTracker {
             cur.requests++;
             return { actionId: cur.actionId, confidence: 'direct', reason: 'navigation requested by the action' };
         }
+        // the step's own requests start while it executes: these are never demoted to background or periodic traffic
+        const prompt = !!cur && (cur.executedMs === undefined || now - cur.executedMs <= PROMPT_MS);
         // interactive actions that ended inside the window, most recent first
         const recent = [];
         for (let i = this.actions.length - 1; i >= 0 && recent.length < 4; i--) {
@@ -82,13 +95,14 @@ export class ActionTracker {
                 break;
             recent.push(a);
         }
-        const every = this.periodic(o.endpointKey, now);
+        const every = prompt ? 0 : this.periodic(o.endpointKey, now);
         const primary = cur ?? recent[0];
         if (!primary) {
-            this.background.set(o.endpointKey, (this.background.get(o.endpointKey) ?? 0) + 1);
+            if (this.background.size < 500 || this.background.has(o.endpointKey))
+                this.background.set(o.endpointKey, (this.background.get(o.endpointKey) ?? 0) + 1);
             return { confidence: 'unattributed', reason: this.current ? 'started during a passive step with no recent interactive action' : 'no action in progress (background or page-initiated)' };
         }
-        const bg = this.background.get(o.endpointKey) ?? 0;
+        const bg = prompt ? 0 : this.background.get(o.endpointKey) ?? 0;
         const competing = recent.filter((a) => a !== primary && a.inflight > 0);
         if (bg >= 2 || every || competing.length) {
             const ids = [primary, ...competing].map((a) => a.actionId);
@@ -99,14 +113,16 @@ export class ActionTracker {
             primary.requests++;
             return { candidateActionIds: ids, confidence: 'ambiguous', reason };
         }
-        const reason = primary === cur ? 'request started during the action' : `request started ${Math.round(now - primary.endedMs)}ms after the action ended`;
+        const reason = primary === cur
+            ? (prompt ? 'request started during the action' : `request started ${Math.round(now - cur.executedMs)}ms after the step returned, while the page settled`)
+            : `request started ${Math.round(now - primary.endedMs)}ms after the action ended`;
         primary.requests++;
         return { actionId: primary.actionId, confidence: 'inferred', reason };
     }
     /**
      * Polling starts at a steady rhythm no matter what the user does. Four starts of one endpoint at near-constant
-     * intervals mark it as periodic; from then on its starts are not blamed on whichever action happens to run.
-     * Returns the interval in ms, or 0.
+     * intervals (outside a step's own execution) mark it as periodic; from then on its starts are not blamed on
+     * whichever action happens to run. Returns the interval in ms, or 0.
      */
     periodic(key, now) {
         let t = this.starts.get(key);

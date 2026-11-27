@@ -21,8 +21,10 @@ test('network URLs lose credentials, fragments and query values; allowlisted par
 test('a secret seen in a recognizable position is removed everywhere afterwards', () => {
   const r = new Redactor();
   r.networkUrl('https://shop.test/x?access_token=CANARY-TOKEN-9f3k2');
-  assert.equal(r.text('console said CANARY-TOKEN-9f3k2 twice: CANARY-TOKEN-9f3k2'), 'console said {{access_token}} twice: {{access_token}}');
-  assert.equal(r.knownOnly('goto /a?x=CANARY-TOKEN-9f3k2'), 'goto /a?x={{access_token}}');
+  assert.equal(r.text('console said CANARY-TOKEN-9f3k2 twice: CANARY-TOKEN-9f3k2'), `console said ${MASK} twice: ${MASK}`);
+  assert.equal(r.knownOnly('goto /a?x=CANARY-TOKEN-9f3k2'), 'goto /a?x=CANARY-TOKEN-9f3k2', 'a value learned from the page never rewrites a flow');
+  r.addSecret('user-supplied-secret', 'password');
+  assert.equal(r.knownOnly('fill user-supplied-secret'), 'fill {{password}}', 'a bound placeholder does');
 });
 test('credential patterns in free text are masked; ordinary UI text survives', () => {
   const r = new Redactor();
@@ -38,7 +40,7 @@ test('headers and JSON: secret-named fields masked, the rest kept, structure bou
   const j = r.json({ name: 'Jane', password: 'CANARY-PW-55z8', session: { token: 'CANARY-TOKEN-9f3k2' }, items: [{ pin: 1234, qty: 2 }] });
   assert.deepEqual(j, { name: 'Jane', password: MASK, session: { token: MASK }, items: [{ pin: MASK, qty: 2 }] });
   assert.ok(!JSON.stringify(j).includes('CANARY'));
-  assert.equal(r.text('later: CANARY-PW-55z8'), 'later: {{password}}', 'a masked JSON value is learned');
+  assert.equal(r.text('later: CANARY-PW-55z8'), `later: ${MASK}`, 'a masked JSON value is learned');
   const deep = {}; let cur = deep; for (let i = 0; i < 40; i++) { cur.n = {}; cur = cur.n; }
   assert.ok(JSON.stringify(r.json(deep)).length < 400, 'depth is bounded');
 });
@@ -144,7 +146,7 @@ test('outside the window nothing is blamed: unattributed, and repeated starts ma
   const a = t.beginAction('click', 'click "Go"'); at(10); t.endAction(a, true);
   at(5000); assert.equal(t.associate(req('GET http://x/poll')).confidence, 'unattributed');
   at(6000); assert.equal(t.associate(req('GET http://x/poll')).confidence, 'unattributed');
-  const b = t.beginAction('click', 'click "Other"'); at(6100);
+  const b = t.beginAction('click', 'click "Other"'); at(6100); t.executed(b); at(6400); // in the settle phase of the click
   const during = t.associate(req('GET http://x/poll'));
   assert.equal(during.confidence, 'ambiguous'); assert.deepEqual(during.candidateActionIds, [b.actionId]); assert.match(during.reason, /background traffic/);
   assert.equal(t.associate(req('GET http://x/other')).confidence, 'inferred', 'other endpoints are unaffected');
@@ -160,14 +162,14 @@ test('overlap: an earlier action with a request still in flight makes the next s
 });
 test('periodic traffic: four starts at a steady rhythm stop being blamed on the running action', () => {
   const { t, at } = tracker(); t.beginBatch('act');
-  const a = t.beginAction('click', 'click "Place order"');
+  const a = t.beginAction('click', 'click "Place order"'); at(10); t.executed(a); // the click returned; polls land in its settle phase
   const seen = [];
-  for (let i = 0; i < 6; i++) { at(100 + i * 200); seen.push(t.associate(req('GET http://x/api/poll')).confidence); }
+  for (let i = 0; i < 6; i++) { at(200 + i * 200); seen.push(t.associate(req('GET http://x/api/poll')).confidence); }
   assert.deepEqual(seen, ['inferred', 'inferred', 'inferred', 'ambiguous', 'ambiguous', 'ambiguous']);
   at(1400); const p = t.associate(req('GET http://x/api/poll'));
   assert.match(p.reason, /fires periodically \(about every 2\d\dms\)/); assert.deepEqual(p.candidateActionIds, [a.actionId]);
   // irregular repeats of a user-driven call are not periodic
-  for (const ms of [2000, 2050, 2900, 3000]) { at(ms); assert.equal(t.associate(req('POST http://x/api/cart')).confidence, 'inferred'); }
+  for (const ms of [2000, 2250, 3100, 3200]) { at(ms); assert.equal(t.associate(req('POST http://x/api/cart')).confidence, 'inferred'); }
 });
 test('direct is reserved for the navigation a goto asked for, once', () => {
   const { t, at } = tracker(); t.beginBatch('open');
@@ -203,7 +205,7 @@ test('json pointer and shapes: shapes carry names and types, never values', () =
 // ------------------------------------------------------------------ rules, deduplication and policy
 let rid = 0;
 const rec = (o = {}) => ({ id: `R-${++rid}`, method: 'POST', url: 'http://shop.test/api/orders', origin: 'http://shop.test', path: '/api/orders', route: '/api/orders', resourceType: 'fetch', firstParty: true, tracked: true, navigation: false, association: { actionId: 'A-1', confidence: 'inferred', reason: 'request started during the action' }, batchId: 'B-1', startedMs: 0, eventIds: [], done: false, ...o });
-const engine = (raw = {}, scope = undefined, opts = {}) => new QualityEngine(cfg(raw, opts), { scopeOf: () => scope, currentBatchId: () => 'B-1', describeAction: () => '' });
+const engine = (raw = {}, scope = undefined, opts = {}) => new QualityEngine(cfg(raw, opts), { scopeOf: () => scope, currentBatchId: () => 'B-1', describeAction: () => '', isReported: () => false });
 test('NET-5XX: high candidate; confidence follows the association; third-party traffic is not flagged', () => {
   const e = engine();
   e.onResponse(rec({ status: 500 }));
@@ -217,9 +219,9 @@ test('deduplication: same rule + endpoint + signature is one finding with a coun
   for (let i = 0; i < 5; i++) e.onResponse(rec({ status: 500, path: `/api/orders/${i}`, route: '/api/orders/{id}' }));
   e.onResponse(rec({ status: 502, path: '/api/orders/9', route: '/api/orders/{id}' }));
   assert.equal(e.findings.length, 2); assert.equal(e.findings[0].occurrences, 5); assert.equal(e.findings[0].requestIds.length, 5);
-  const { fresh, repeats } = e.takeNew();
-  assert.equal(fresh.length, 2); assert.equal(repeats, 4);
-  assert.equal(e.takeNew().fresh.length, 0, 'a finding is surfaced inline once');
+  const { fresh, recurring } = e.takeNew();
+  assert.equal(fresh.length, 2); assert.equal(recurring.length, 0);
+  const again = e.takeNew(); assert.equal(again.fresh.length + again.recurring.length, 0, 'nothing happened since: nothing is listed again');
 });
 test('NET-4XX: 401/403 informational, other 4xx low; favicon ignored', () => {
   const e = engine();
@@ -241,7 +243,7 @@ test('an explicit assertion marks one response expected; a second, unexpected on
   e.onResponse(a); e.markExpected(a.id, 'explicit expect_request POST /api/orders 422');
   assert.equal(e.findings[0].status, 'expected');
   e.onResponse(b);
-  assert.equal(e.findings[0].status, 'candidate'); assert.match(e.findings[0].statusReason, /1 of 2/);
+  assert.equal(e.findings[0].status, 'candidate'); assert.match(e.findings[0].statusReason, /1 expected of 2 occurrences/);
   e.markExpected(a.id, 'again'); assert.equal(e.findings[0].expectedOccurrences, 1, 'marking twice counts once');
 });
 test('suppressions name what they suppress, stay visible and expire', () => {
@@ -257,7 +259,7 @@ test('suppressions name what they suppress, stay visible and expire', () => {
 test('business rule: evaluated only with a captured body; otherwise recorded as not evaluated', () => {
   const rules = { quality: { businessRules: [{ id: 'ORDER-SUCCESS', method: 'POST', path: '/api/orders', status: 200, jsonPointer: '/success', equals: true }] } };
   const e = engine(rules);
-  const bad = rec({ status: 200, body: { state: 'captured', bytes: 40 } });
+  const bad = rec({ status: 200, body: { state: 'captured', bytes: 40, json: { success: false, error: 'OUT_OF_STOCK' } } });
   e.onBody(bad, { success: false, error: 'OUT_OF_STOCK' });
   assert.equal(e.findings[0].ruleId, 'BUSINESS-ERROR'); assert.equal(e.findings[0].severity, 'high'); assert.match(e.findings[0].title, /HTTP 200 but \/success = false/);
   e.onBody(rec({ status: 200, body: { state: 'captured' } }), { success: true }); assert.equal(e.findings.length, 1, 'a passing response is not a finding');

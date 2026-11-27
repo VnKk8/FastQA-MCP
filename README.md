@@ -171,13 +171,13 @@ The repository's benchmark runs the same login, cart and currency journey on the
 | Tool calls / model turns | 10 | **2** |
 | Returned tokens (approx.) | 1,270 | **310** |
 | Tool schema tokens (approx.) | 5,300 | **1,420** |
-| Browser-side time, one run | 3.1 s | **2.5 s** |
+| Browser-side time, one run | 3.2 s | **2.5 s** |
 | Estimated end-to-end at 3 s per model turn | ~33 s | **~8.5 s** |
 | Replay of the saved flow | needs the model again | **1.4 s, no model** |
 
 These are results for one small fixture on one machine, not universal guarantees. The end-to-end row is an estimate that assumes 3 seconds per model turn; no live model was timed. Reproduce with `npm run bench`. Real results depend on the site, client, model, hardware and network.
 
-The unreleased observation layer was measured against 0.3.2 on the same fixture with 30 warm runs (`npm run perf`): the same 2 tool calls, the same median browser-side time (p95 +1%), clean responses 3% to 11% larger (one extra line), and tool schemas of about 1,840 tokens instead of 1,420. Method and numbers are in the [reference](docs/REFERENCE.md#measured-performance).
+The unreleased observation layer was measured against 0.3.2 on the same fixture with 30 warm runs (`npm run perf`): the same 2 tool calls, median and p95 browser-side time within 1%, clean responses 3% to 11% larger (one extra line), and tool schemas of about 1,840 tokens instead of 1,420. Method and numbers are in the [reference](docs/REFERENCE.md#measured-performance).
 
 ## What FastQA can test
 

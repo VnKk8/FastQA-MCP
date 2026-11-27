@@ -38,6 +38,10 @@ Not on npm yet. Implemented and tested on the `evolution/v1-roadmap` branch; see
 - **Query values are hidden** in network URLs shown by `evidence`, assertion messages and reports. Allow specific parameters with `privacy.keepQueryParams`. `expect_request` still matches against the full URL.
 - **TLS.** Without a config file nothing changes (invalid certificates are accepted, now with a warning on stderr when an HTTPS site is opened). As soon as `.fastqa/config.json` exists, invalid certificates are rejected unless `browser.ignoreHTTPSErrors` is `true`.
 - **JUnit failure text** lists the screenshot with a path relative to `.fastqa/`.
+- **Old reports and failure screenshots are pruned.** Only the newest 200 report pairs in `reports/` and the newest 200 failure screenshots in `artifacts/` are kept (`artifacts.maxReports`, `artifacts.maxScreenshots`). 0.3 kept them forever.
+- **`run` rejects unknown options** with exit code 2. 0.3 ignored them.
+- `open` now resolves `{{placeholders}}` in its URL, like `act` does.
+- When a popup closes, the page that is still open becomes the active page again. In 0.3 the session stayed on the closed page until the next `open`.
 - New dependency declared: `ajv` (already installed through the MCP SDK).
 
 ## 0.3.2 (2026-11-26)

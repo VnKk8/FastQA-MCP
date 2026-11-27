@@ -122,6 +122,17 @@ const place = [{ do: 'click', target: 'Place order' }, { do: 'expect_text', valu
   await r.close();
   check('retention never touches anything that is not a fastqa run directory', existsSync(path.join(dir, 'sessions', 'my-notes', 'keep.txt')));
 
+  // failure screenshots are bounded too
+  const shots = mkdtempSync(path.join(tmpdir(), 'fq-safe-4s-'));
+  mkdirSync(path.join(shots, 'artifacts'), { recursive: true });
+  writeFileSync(path.join(shots, 'artifacts', 'my-design.jpg'), 'user file');
+  const p = await connect({ dir: shots, config: { artifacts: { maxScreenshots: 2 }, browser: { ignoreHTTPSErrors: true } } });
+  await p.call('open', { url: `${base}/orders?notify=off`, fresh: true });
+  for (let i = 0; i < 5; i++) await p.call('act', { steps: [{ do: 'click', target: `No such button ${i}`, timeout: 200 }] });
+  await p.close();
+  const jpgs = readdirSync(path.join(shots, 'artifacts'));
+  check('failure screenshots: only the newest artifacts.maxScreenshots are kept, user files are left alone', jpgs.filter((f) => /^fail-\d+\.jpg$/.test(f)).length === 2 && jpgs.includes('my-design.jpg'), jpgs.join(', '));
+
   const o = await connect({ prefix: 'fq-safe-4o-', config: { browser: { allowedOrigins: [base], ignoreHTTPSErrors: true } } });
   out = await o.call('open', { url: 'http://localhost:1/elsewhere' });
   has('browser.allowedOrigins: other origins are refused before navigating', out, 'origin http://localhost:1 is not in browser.allowedOrigins');

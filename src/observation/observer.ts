@@ -52,6 +52,7 @@ export class Observer {
     this.quality = new QualityEngine(cfg, {
       scopeOf: (b) => this.actions.scopeOf(b),
       currentBatchId: () => this.actions.currentBatch?.batchId,
+      isReported: (b) => this.actions.isReported(b),
       describeAction: (a) => this.actions.describe(a),
     });
     for (const o of cfg.firstPartyOrigins) this.firstParty.add(o);
@@ -94,7 +95,7 @@ export class Observer {
     const firstParty = this.firstParty.has(origin);
     let frame: Frame | null = null;
     try { frame = req.frame(); } catch { /* service worker or detached */ }
-    const route = normalizePath(pathname, this.cfg.discovery.pathTemplates);
+    const route = normalizePath(pathname.slice(0, 500), this.cfg.discovery.pathTemplates);
     const method = req.method();
     const from = req.redirectedFrom();
     const prev = from ? this.byReq.get(from) : undefined;
@@ -106,7 +107,7 @@ export class Observer {
         : this.actions.associateMoment();
     const pageId = this.pageId(page);
     const rec: RequestRecord & { held?: boolean } = {
-      id: `R-${++this.nReq}`, method, url: this.redactor.networkUrl(rawUrl), origin, path: this.redactor.text(pathname), route: this.redactor.text(route),
+      id: `R-${++this.nReq}`, method, url: this.redactor.networkUrl(rawUrl), origin, path: this.redactor.text(pathname.slice(0, 500)), route: this.redactor.text(route.slice(0, 500)),
       resourceType, firstParty, tracked, navigation, pageId, frameId: this.frameId(page, frame),
       batchId: this.actions.get(association.actionId)?.batchId ?? this.actions.currentBatch?.batchId,
       association, startedMs: this.now(), redirectedFrom: prev?.id, eventIds: [], done: false,
@@ -209,34 +210,39 @@ export class Observer {
   private captureBody(rec: RequestRecord, res: Response, h: Record<string, string>) {
     if (!rec.tracked || rec.resourceType === 'document' || rec.status === undefined || (rec.status >= 300 && rec.status < 400)) return;
     const wants = this.quality.wantsBody(rec);
-    const skip = (reason: string) => { rec.body = { state: 'skipped', reason }; this.stats.bodiesSkipped++; this.quality.onBody(rec); };
+    const rules = (raw?: unknown) => { try { this.quality.onBody(rec, raw); } catch { /* a rule must never break observation */ } };
+    const skip = (reason: string) => { rec.body = { state: 'skipped', reason }; this.stats.bodiesSkipped++; rules(); };
     const allowed = this.captureAllowed(rec);
     if (allowed !== true) { if (wants) skip(allowed); return; }
     if (!/json/i.test(rec.contentType ?? '')) return skip('not-json');
     const c = this.cfg.capture;
-    const len = h['content-length'] === undefined ? NaN : Number(h['content-length']);
-    // Playwright cannot stream a body: an unknown size is skipped unless explicitly allowed, so nothing unbounded is buffered by default.
+    // Playwright cannot stream a body. content-length is the size on the wire, so it only bounds an uncompressed body:
+    // a compressed or chunked response is "unknown size" and is skipped unless explicitly allowed.
+    const encoded = !!h['content-encoding'] && !/^identity$/i.test(h['content-encoding']);
+    const len = h['content-length'] === undefined || encoded ? NaN : Number(h['content-length']);
     if (Number.isNaN(len)) { if (!c.allowUnknownLength) return skip('unknown-size'); }
     else if (len > c.maxBodyBytes) return skip('oversized');
     if (this.bodyReaders >= c.maxBodyReaders) return skip('reader-limit');
     if (this.capturedBytes >= c.maxBytes / 2) return skip('capture-budget');
     rec.body = { state: 'pending' }; this.bodyReaders++;
-    let timer: NodeJS.Timeout | undefined;
-    const timeout = new Promise<never>((_, rej) => { timer = setTimeout(() => rej(new Error('timeout')), BODY_TIMEOUT_MS); });
-    let raw: unknown;
-    Promise.race([res.body(), timeout]).then((buf) => {
+    let settled = false; let raw: unknown;
+    const done = () => {
+      if (settled) return;
+      settled = true; clearTimeout(timer);
+      if (!this.disposed) rules(raw);
+      if (rec.endedMs !== undefined) this.finish(rec);
+    };
+    // The reader slot is released when the read itself ends, not when we stop waiting for it.
+    const read = res.body().finally(() => { this.bodyReaders--; });
+    const timer = setTimeout(() => { rec.body = { state: 'failed', reason: 'read-timeout' }; done(); }, BODY_TIMEOUT_MS);
+    read.then((buf) => {
+      if (settled) return;
       if (buf.length > c.maxBodyBytes) { rec.body = { state: 'skipped', reason: 'oversized', bytes: buf.length }; this.stats.bodiesSkipped++; return; }
       raw = JSON.parse(buf.toString('utf8'));
       // Only the sanitized copy is retained; the raw value is handed to the rules once and then dropped.
       rec.body = { state: 'captured', bytes: buf.length, json: this.redactor.json(raw) };
       this.capturedBytes += buf.length; this.stats.bodiesCaptured++;
-    }).catch((e) => {
-      rec.body = { state: 'failed', reason: /timeout/.test(String(e)) ? 'read-timeout' : 'read-error' };
-    }).finally(() => {
-      clearTimeout(timer); this.bodyReaders--;
-      if (!this.disposed) this.quality.onBody(rec, raw);
-      if (rec.endedMs !== undefined) this.finish(rec);
-    });
+    }).catch(() => { if (!settled) { raw = undefined; rec.body = { state: 'failed', reason: 'read-error' }; } }).then(done, done);
   }
 
   // ------------------------------------------------------------------ page signals
@@ -245,15 +251,15 @@ export class Observer {
     if (this.disposed || m.type() !== 'error') return;
     this.stats.consoleErrors++;
     const loc = m.location();
-    const ev = this.emit('console_error', { text: this.redactor.text(m.text()).slice(0, 500), source: loc?.url ? `${this.redactor.networkUrl(loc.url)}:${loc.lineNumber}` : undefined }, this.actions.associateMoment(), { pageId: this.pageId(page) });
+    const ev = this.emit('console_error', { text: this.redactor.text(m.text().slice(0, 2000)).slice(0, 500), source: loc?.url ? `${this.redactor.networkUrl(loc.url)}:${loc.lineNumber}` : undefined }, this.actions.associateMoment(), { pageId: this.pageId(page) });
     this.quality.onConsoleError(ev);
   }
 
   onPageError(page: Page, e: Error) {
     if (this.disposed) return;
     this.stats.pageErrors++;
-    const stack = String(e?.stack ?? '').split('\n').slice(1, 4).map((l) => this.redactor.text(l.trim()).slice(0, 200));
-    const ev = this.emit('page_error', { message: this.redactor.text(String(e?.message || e)).slice(0, 500), stack: stack.length ? stack : undefined }, this.actions.associateMoment(), { pageId: this.pageId(page) });
+    const stack = String(e?.stack ?? '').slice(0, 4000).split('\n').slice(1, 4).map((l) => this.redactor.text(l.trim().slice(0, 400)).slice(0, 200));
+    const ev = this.emit('page_error', { message: this.redactor.text(String(e?.message || e).slice(0, 2000)).slice(0, 500), stack: stack.length ? stack : undefined }, this.actions.associateMoment(), { pageId: this.pageId(page) });
     this.quality.onPageError(ev);
   }
 
@@ -269,7 +275,20 @@ export class Observer {
 
   onPage(page: Page, type: 'page_opened' | 'page_closed') {
     if (this.disposed) return;
+    if (type === 'page_closed') this.abandon(this.pageId(page));
     this.emit('state_change', { type, url: type === 'page_opened' ? undefined : this.redactor.pageUrl(page.url()) }, this.actions.associateMoment(), { pageId: this.pageId(page) });
+  }
+
+  /**
+   * A page that closes takes its open requests with it: the browser reports neither a finish nor a failure for them.
+   * Without this they would stay "pending" for the rest of the session and coverage would never be complete again.
+   */
+  private abandon(pageId: string) {
+    for (const rec of this.requests.values()) {
+      if (rec.pageId !== pageId || rec.done || rec.endedMs !== undefined || rec.status !== undefined) continue;
+      rec.failure = 'page closed'; rec.aborted = true; rec.endedMs = this.now();
+      this.settle(rec); this.finish(rec);
+    }
   }
 
   // ------------------------------------------------------------------ coverage and finalization

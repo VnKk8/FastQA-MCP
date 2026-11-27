@@ -49,6 +49,7 @@ export async function runBatch(session: Session, steps: Step[], o: BatchOptions)
       let stepOk = false;
       try {
         const r = await runStep(session, bind(step, o.vars ?? {}), step);
+        obs.actions.executed(action); // what follows is the settle phase
         stepOk = r.ok;
         lines.push(o.number ? `${String(i + 1).padStart(2)}. ${r.line}` : r.line);
         if (step.do.startsWith('expect_')) assertions[r.ok ? 'passed' : 'failed']++;
@@ -102,7 +103,12 @@ export function qualityOf(obs: Observer | undefined, requestsBefore = 0): Qualit
 export async function finalize(session: Session): Promise<QualityResult | undefined> {
   const obs = session.obs;
   if (!obs || !obs.quality.enabled) return undefined;
-  if (obs.cfg.enforce && obs.cfg.finalizeTimeoutMs > 0) await obs.drain(obs.cfg.finalizeTimeoutMs);
+  if (obs.cfg.enforce && obs.cfg.finalizeTimeoutMs > 0) {
+    // Only the requests that were open when the run ended are waited for and judged. Traffic that starts later
+    // (polling) is not part of this run: it neither delays finalization nor makes it "incomplete".
+    const { pending } = await obs.drain(obs.cfg.finalizeTimeoutMs);
+    return summarize(obs, { final: true, pending: pending.length });
+  }
   return summarize(obs, { final: true });
 }
 

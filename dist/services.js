@@ -58,7 +58,9 @@ export function installServices() {
     });
 }
 export async function exportBundle(obs, extra = {}) {
-    bundled.add(obs);
+    // a bundle written while the session is still running is a snapshot: the final one is still written when it ends
+    if (obs.disposed || extra.final)
+        bundled.add(obs);
     const g = graphs.get(obs);
     return writeBundle(obs, { ...extra, environment: { ...obs.environment, ...extra.environment }, discovery: g ? { endpoints: g.export(), journeys: g.journeys() } : undefined });
 }
@@ -88,7 +90,7 @@ export async function mergeDiscovery() {
         return `No discovery exports found in ${root}. Run with quality.mode "discovery" and artifacts enabled (or --bundle).`;
     const merged = merge(exports);
     const file = path.join(FLOW_DIR(), 'discovery.json');
-    await writeAtomic(file, redactor.text(JSON.stringify(merged, null, 2)) + '\n');
+    await writeAtomic(file, JSON.stringify(redactor.deep(merged), null, 2) + '\n');
     return `Merged ${exports.length} session export${exports.length === 1 ? '' : 's'} into ${file}: ${merged.routes.length} routes, ${merged.endpoints.length} endpoints, ${merged.edges.length} edges.\n` +
         'This lists observed activity only: it is not a coverage measure and says nothing about pages or endpoints that were not visited.';
 }

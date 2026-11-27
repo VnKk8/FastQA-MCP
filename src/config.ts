@@ -59,14 +59,14 @@ const ConfigSchema = z.object({
   privacy: z.object({
     keepQueryParams: z.array(z.string()).optional(),
     secretVars: z.array(z.string()).optional(),
-    secretKeys: z.array(z.string()).optional(),
+    secretKeys: z.array(z.string().min(1)).optional(),
     maskSelectors: z.array(z.string()).optional(),
   }).strict().optional(),
   locator: z.object({ strict: z.boolean().optional() }).strict().optional(),
   discovery: z.object({ enabled: z.boolean().optional(), pathTemplates: z.array(z.string()).optional() }).strict().optional(),
   artifacts: z.object({
     enabled: z.boolean().optional(), maxBytesPerRun: pos.optional(), retentionDays: z.number().min(0).optional(),
-    maxRuns: pos.optional(), screenshots: z.boolean().optional(),
+    maxRuns: pos.optional(), screenshots: z.boolean().optional(), maxScreenshots: pos.optional(), maxReports: pos.optional(),
   }).strict().optional(),
   browser: z.object({ ignoreHTTPSErrors: z.boolean().optional(), allowedOrigins: z.array(origin).optional() }).strict().optional(),
   mcp: z.object({ structuredContent: z.boolean().optional() }).strict().optional(),
@@ -97,7 +97,7 @@ export interface Config {
   privacy: { keepQueryParams: string[]; secretVars: string[]; secretKeys: string[]; maskSelectors: string[] };
   strictLocators: boolean;
   discovery: { enabled: boolean; pathTemplates: string[] };
-  artifacts: { enabled: boolean; maxBytesPerRun: number; retentionDays: number; maxRuns: number; screenshots: boolean };
+  artifacts: { enabled: boolean; maxBytesPerRun: number; retentionDays: number; maxRuns: number; screenshots: boolean; maxScreenshots: number; maxReports: number };
   browser: { ignoreHTTPSErrors: boolean; allowedOrigins: string[]; legacyTls: boolean };
   structuredContent: boolean;
 }
@@ -157,6 +157,7 @@ export function parseConfig(raw: unknown, opts: { mode?: Mode; fileExists?: bool
     artifacts: {
       enabled: c.artifacts?.enabled ?? false, maxBytesPerRun: c.artifacts?.maxBytesPerRun ?? 32 * MiB,
       retentionDays: c.artifacts?.retentionDays ?? 7, maxRuns: c.artifacts?.maxRuns ?? 20, screenshots: c.artifacts?.screenshots ?? true,
+      maxScreenshots: c.artifacts?.maxScreenshots ?? 200, maxReports: c.artifacts?.maxReports ?? 200,
     },
     browser: { ignoreHTTPSErrors, allowedOrigins: c.browser?.allowedOrigins ?? [], legacyTls: legacyTls && ignoreHTTPSErrors },
     structuredContent: c.mcp?.structuredContent ?? truthy(env.FASTQA_STRUCTURED),

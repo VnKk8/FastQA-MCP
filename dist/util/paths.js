@@ -7,12 +7,16 @@ export function patternToRegex(pattern) {
             return '.*';
         if (seg === '*' || /^\{[^}]+\}$/.test(seg) || /^:[\w-]+$/.test(seg))
             return '[^/]+';
-        return seg.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '[^/]*');
+        // one wildcard inside a segment is enough for real patterns; more would only make matching polynomial
+        let stars = 0;
+        return seg.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*/g, () => (stars++ ? '\\*' : '[^/]*'));
     }).join('/');
     return new RegExp(`^${src}/?$`);
 }
 const cache = new Map();
 export function pathMatches(pattern, pathname) {
+    if (pathname.length > 2000)
+        return false; // a path this long is not a real endpoint; do not run patterns on it
     let re = cache.get(pattern);
     if (!re) {
         re = patternToRegex(pattern);

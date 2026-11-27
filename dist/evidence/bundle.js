@@ -18,7 +18,8 @@ const FINDING_ID = /^F-\d{3,6}$/;
 export const sessionsDir = () => path.join(FLOW_DIR(), 'sessions');
 export const sessionDir = (obs) => path.join(sessionsDir(), obs.runId);
 /** Serialization boundary: every line is sanitized again with everything the redactor has learned by now. */
-const line = (v) => redactor.text(JSON.stringify(v)) + '\n';
+const line = (v) => JSON.stringify(redactor.deep(v)) + '\n';
+const pretty = (v) => JSON.stringify(redactor.deep(v), null, 2) + '\n';
 /** Streams observations to disk as they happen, within a byte budget. Used when artifacts.enabled. */
 export class BundleStream {
     obs;
@@ -55,7 +56,8 @@ export class BundleStream {
             this.failed = true;
         }
     }
-    async close() { const s = this.stream; if (s)
+    /** After close, later events are ignored (the session is over). */
+    async close() { const s = this.stream; this.failed = true; if (s)
         await new Promise((r) => s.end(() => r())); this.stream = undefined; }
 }
 export const streams = new WeakMap();
@@ -95,7 +97,8 @@ export function summaryOf(obs, extra = {}, files = {}) {
             note: 'Observed browser activity of this session only. Backend-only traffic, service workers and WebSockets are not covered. This is not a coverage measure of the product.',
         },
         reproduction: { status: 'not attempted', flow: extra.flow ? `flows/${extra.flow}.json` : undefined },
-        artifacts: { ...files, reports: extra.reports, screenshot: extra.screenshot },
+        // the screenshot of a failed run is taken after the run ended, not at the moment a finding was observed
+        artifacts: { ...files, reports: extra.reports, screenshot: extra.screenshot ? { file: extra.screenshot, taken: 'after the run failed (post-event)' } : undefined },
     };
 }
 const networkOf = (obs, f) => f.requestIds.map((id) => obs.requests.get(id)).filter((r) => !!r).map((r) => ({
@@ -145,7 +148,7 @@ export async function writeBugDraft(obs, findingId, extra = {}) {
     const dir = path.join(sessionDir(obs), 'evidence', f.id);
     const markdown = redactor.text(bugMarkdown(obs, f, extra));
     await writeAtomic(path.join(dir, 'finding.md'), markdown);
-    await writeAtomic(path.join(dir, 'network.json'), redactor.text(JSON.stringify({ schemaVersion: 1, finding: f.id, requests: networkOf(obs, f) }, null, 2)) + '\n');
+    await writeAtomic(path.join(dir, 'network.json'), pretty({ schemaVersion: 1, finding: f.id, requests: networkOf(obs, f) }));
     return { file: path.join(dir, 'finding.md'), markdown };
 }
 /** Writes the whole bundle for a session and returns its directory. Safe to call more than once: files are replaced atomically. */
@@ -161,7 +164,9 @@ export async function writeBundle(obs, extra = {}) {
     let obsBytes = 0;
     let obsLines = 0;
     if (stream) {
-        await stream.close();
+        // a bundle asked for while the session is still running leaves the stream open: events keep being appended
+        if (obs.disposed || extra.final)
+            await stream.close();
         obsBytes = stream.bytes;
         obsLines = stream.written;
         if (stream.skipped)
@@ -188,11 +193,11 @@ export async function writeBundle(obs, extra = {}) {
         actionId: a.actionId, batchId: a.batchId, batchKind: batches.get(a.batchId)?.kind, scope: batches.get(a.batchId)?.scope, index: a.index, do: a.do, label: a.label,
         ok: a.ok, pageId: a.pageId, startedMs: Math.round(a.startedMs), endedMs: a.endedMs === undefined ? undefined : Math.round(a.endedMs), requests: a.requests,
     })).join(''));
-    await writeAtomic(path.join(dir, 'findings.json'), redactor.text(JSON.stringify({ schemaVersion: 1, sessionId: obs.sessionId, runId: obs.runId, note: 'Candidates are leads to verify, not confirmed defects.', findings: obs.quality.findings }, null, 2)) + '\n');
+    await writeAtomic(path.join(dir, 'findings.json'), pretty({ schemaVersion: 1, sessionId: obs.sessionId, runId: obs.runId, note: 'Candidates are leads to verify, not confirmed defects.', findingsNotKept: obs.quality.findingsDropped, findings: obs.quality.findings }));
     const files = { actions: 'actions.jsonl', observations: 'observations.jsonl', findings: 'findings.json', observationEvents: obsLines, bytes: obsBytes };
     if (extra.discovery) {
-        await writeAtomic(path.join(dir, 'discovery', 'endpoints.json'), redactor.text(JSON.stringify(extra.discovery.endpoints, null, 2)) + '\n');
-        await writeAtomic(path.join(dir, 'discovery', 'journeys.json'), redactor.text(JSON.stringify(extra.discovery.journeys, null, 2)) + '\n');
+        await writeAtomic(path.join(dir, 'discovery', 'endpoints.json'), pretty(extra.discovery.endpoints));
+        await writeAtomic(path.join(dir, 'discovery', 'journeys.json'), pretty(extra.discovery.journeys));
         files.discovery = ['discovery/endpoints.json', 'discovery/journeys.json'];
     }
     const drafts = [];
@@ -204,7 +209,7 @@ export async function writeBundle(obs, extra = {}) {
     files.bugDrafts = drafts;
     files.truncation = truncation;
     // the manifest goes last and atomically: its presence means the bundle is complete
-    await writeAtomic(path.join(dir, 'summary.json'), redactor.text(JSON.stringify(summaryOf(obs, extra, files), null, 2)) + '\n');
+    await writeAtomic(path.join(dir, 'summary.json'), pretty(summaryOf(obs, extra, files)));
     await cleanupSessions(cfg, obs.runId).catch(() => { });
     return dir;
 }
@@ -232,7 +237,8 @@ export async function cleanupSessions(cfg, keep) {
         const m = /^(\d{4})(\d\d)(\d\d)T(\d\d)(\d\d)(\d\d)Z/.exec(name);
         const ms = Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6]);
         const complete = await fs.access(path.join(root, name, 'summary.json')).then(() => true, () => false);
-        runs.push({ name, ms, complete });
+        const touched = await fs.stat(path.join(root, name, 'observations.jsonl')).then((s) => s.mtimeMs, () => 0);
+        runs.push({ name, ms, complete, active: Date.now() - touched < 3_600_000 });
     }
     runs.sort((a, b) => (a.name < b.name ? 1 : -1)); // newest first: run ids sort by time
     const now = Date.now();
@@ -241,7 +247,7 @@ export async function cleanupSessions(cfg, keep) {
     let kept = 0;
     for (const r of runs) {
         const expired = now - r.ms > cfg.artifacts.retentionDays * day;
-        const stale = !r.complete && now - r.ms > day;
+        const stale = !r.complete && !r.active && now - r.ms > day;
         if (r.name !== keep && (expired || stale || (r.complete && kept >= cfg.artifacts.maxRuns))) {
             await fs.rm(path.join(root, r.name), { recursive: true, force: true }).catch(() => { });
             removed.push(r.name);

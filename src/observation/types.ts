@@ -83,6 +83,8 @@ export interface ActionRecord {
   interactive: boolean;
   pageId?: string;
   startedMs: number;
+  /** when the step itself returned; what follows until endedMs is the settle phase */
+  executedMs?: number;
   endedMs?: number;
   ok?: boolean;
   inflight: number;   // requests attributed to this action that have no response yet
@@ -125,6 +127,7 @@ export interface Finding {
   fingerprint: string;
   occurrences: number;
   expectedOccurrences: number;
+  suppressedOccurrences: number;
   firstSequence: number;
   lastSequence: number;
   firstAt: string;

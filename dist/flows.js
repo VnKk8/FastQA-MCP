@@ -2,16 +2,18 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { Session } from './session.js';
 import { runBatch, finalize } from './exec.js';
-import { FLOW_DIR, safe, rel, writeAtomic } from './dirs.js';
+import { FLOW_DIR, safe, rel, writeAtomic, pruneScreenshots } from './dirs.js';
 import { redactor } from './privacy/redact.js';
 import { exportBundle } from './services.js';
 export { FLOW_DIR };
 const flowPath = (name) => path.join(FLOW_DIR(), 'flows', `${safe(name)}.json`);
 export async function saveFlow(name, steps) {
     const p = flowPath(name);
-    const flow = { name, created: new Date().toISOString(), schema: 2, steps };
-    // A secret value the redactor knows goes back to its {{placeholder}}: the file stays replayable and holds no secret.
-    await writeAtomic(p, redactor.knownOnly(JSON.stringify(flow, null, 2)));
+    // A secret the user supplied through a {{placeholder}} goes back to that placeholder: the file stays replayable and
+    // holds no secret. Each string is cleaned before serialization; values learned from the page never rewrite a flow.
+    const clean = (v) => (typeof v === 'string' ? redactor.knownOnly(v) : Array.isArray(v) ? v.map(clean) : v);
+    const flow = { name, created: new Date().toISOString(), schema: 2, steps: steps.map((s) => Object.fromEntries(Object.entries(s).map(([k, v]) => [k, clean(v)]))) };
+    await writeAtomic(p, JSON.stringify(flow, null, 2));
     return p;
 }
 export async function loadFlow(name) {
@@ -70,6 +72,7 @@ export async function runFlow(name, vars = {}, shared, opts = {}) {
                 shotFile = path.join(FLOW_DIR(), 'artifacts', `${safe(name)}-${s.obs.runId}.jpg`);
                 await fs.mkdir(path.dirname(shotFile), { recursive: true });
                 await fs.writeFile(shotFile, buf);
+                await pruneScreenshots(s.cfg.artifacts.maxScreenshots).catch(() => { });
             }
         }
         catch { /* page gone */ }
@@ -91,7 +94,7 @@ export async function runFlow(name, vars = {}, shared, opts = {}) {
             recentRuns.shift();
         if (opts.bundle || s.cfg?.artifacts.enabled) {
             try {
-                const dir = await exportBundle(obs, { flow: safe(name), execution: { status: stepsOk ? 'passed' : 'failed', steps: flow.steps.length, failedAt }, policy: q ? { outcome: q.policy.outcome, reasons: q.policy.reasons } : undefined, screenshot: shotFile ? rel(shotFile) : undefined });
+                const dir = await exportBundle(obs, { final: true, flow: safe(name), execution: { status: stepsOk ? 'passed' : 'failed', steps: flow.steps.length, failedAt }, policy: q ? { outcome: q.policy.outcome, reasons: q.policy.reasons } : undefined, screenshot: shotFile ? rel(shotFile) : undefined });
                 run.bundle = rel(dir);
             }
             catch (e) {
@@ -129,12 +132,18 @@ function fastqa(page: import('@playwright/test').Page) {
   type Ev = { kind: 'http' | 'console' | 'pageerror'; text: string; method?: string; url?: string; status?: number };
   const log: Ev[] = [];
   const ctx = page.context();
+  const open = new Set<unknown>();
+  ctx.on('request', (r) => { if (!r.serviceWorker()) open.add(r); });
+  ctx.on('requestfinished', (r) => { open.delete(r); });
   ctx.on('response', (res) => {
     const r = res.request();
+    open.delete(r);
+    if (r.serviceWorker()) return;
     if (['fetch', 'xhr', 'document'].includes(r.resourceType())) log.push({ kind: 'http', method: r.method(), url: r.url(), status: res.status(), text: \`\${res.status()} \${r.method()} \${r.url()}\` });
   });
   ctx.on('requestfailed', (r) => {
-    if (!/ERR_ABORTED/.test(r.failure()?.errorText ?? '')) log.push({ kind: 'http', method: r.method(), url: r.url(), status: 0, text: \`FAILED \${r.method()} \${r.url()}\` });
+    open.delete(r);
+    if (!r.serviceWorker() && !/ERR_ABORTED/.test(r.failure()?.errorText ?? '')) log.push({ kind: 'http', method: r.method(), url: r.url(), status: 0, text: \`FAILED \${r.method()} \${r.url()}\` });
   });
   ctx.on('console', (m) => {
     if (m.type() === 'error' && !/Failed to load resource/.test(m.text()) && !/favicon/.test(m.location()?.url || '')) log.push({ kind: 'console', text: m.text() });
@@ -156,6 +165,10 @@ function fastqa(page: import('@playwright/test').Page) {
     },
     /** JS exceptions, console.error, network failures and HTTP 5xx since the test started; "strict" also counts 4xx */
     async expectNoErrors(mode = '', ignore?: string) {
+      // fastqa replay lets the page settle after each action (bounded, 1.5 s) before the next step runs, so a response
+      // that arrives a moment after a click is seen. Wait the same way here, or a slow failure would be missed.
+      const end = Date.now() + 1500;
+      while (open.size > 0 && Date.now() < end) await page.waitForTimeout(25);
       const min = /strict/i.test(mode) ? 400 : 500;
       const bad = log.filter((e) => (e.kind !== 'http' || e.status === 0 || e.status! >= min) && !(ignore && (matches(e.text, ignore) || (!!e.url && matches(e.url, ignore)))));
       expect(bad.map((e) => \`\${e.kind}: \${e.text.slice(0, 120)}\`), 'expect_no_errors').toEqual([]);
@@ -187,7 +200,10 @@ function fastqa(page: import('@playwright/test').Page) {
  */
 export async function exportFlow(name, strict = false) {
     const flow = await loadFlow(name);
-    const parity = { executable: 0, unsupported: [], notExported: ['automatic QA findings and strict policy (fastqa replay only)'] };
+    const parity = { executable: 0, unsupported: [], notExported: [
+            'automatic QA findings and strict policy (fastqa replay only)',
+            'the bounded settle after each action (replay waits up to 1.5 s for pending requests after every click; the spec does so only inside expectNoErrors)',
+        ] };
     const lines = flow.steps.map((s, i) => {
         const code = stepCode(s);
         if (!code || /^\/\//.test(code)) {
@@ -204,7 +220,7 @@ export async function exportFlow(name, strict = false) {
     const needsHelper = flow.steps.some((s) => HELPER_STEPS.has(s.do));
     const code = redactor.knownOnly(`import { test, expect } from '@playwright/test';
 
-// Generated by fastqa-mcp from flow "${flow.name}" (${flow.created})
+// Generated by fastqa-mcp from flow ${JSON.stringify(String(flow.name).replace(/[\r\n\u2028\u2029]+/g, ' '))} (${String(flow.created).replace(/[^\w:.+-]/g, '')})
 // Templated values read FASTQA_VAR_<name> environment variables.
 // fastqa:parity ${JSON.stringify(parity)}
 ${needsHelper ? HELPER : ''}
@@ -265,6 +281,7 @@ export async function runSuite(names, vars, dataset, shared, opts = {}) {
         }
     }
     const { writeReports } = await import('./report.js');
-    const files = await writeReports(runs, FLOW_DIR());
+    const { loadConfig } = await import('./config.js');
+    const files = await writeReports(runs, FLOW_DIR(), loadConfig(FLOW_DIR(), opts.mode).artifacts.maxReports);
     return { runs, ...files };
 }

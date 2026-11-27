@@ -129,28 +129,44 @@ export class Session {
    */
   private attachContext(ctx: BrowserContext) {
     const on = (ev: string, fn: (...a: any[]) => void) => { (ctx as any).on(ev, fn); this.detachers.push(() => (ctx as any).off(ev, fn)); };
+    const cdp = !!env.FASTQA_CDP_URL;
     const pageOf = (r: { frame(): Frame }): Page | undefined => { try { return r.frame().page(); } catch { return this.page; } };
+    // Context-level events also carry traffic that page-level listeners (0.3) never saw: requests made by a service
+    // worker, and pages fastqa does not drive (other tabs of a browser attached over CDP). Both are ignored.
+    const foreign = (r: import('playwright').Request): boolean => {
+      try { if (r.serviceWorker()) return true; } catch { /* not a worker request */ }
+      // In a context fastqa created, every page is one it drives (popups included, even before their 'page' event).
+      // Only an attached browser (CDP) has tabs that belong to someone else.
+      if (!cdp) return false;
+      const p = pageOf(r);
+      return !!p && !this.attachedPages.has(p);
+    };
+    const stranger = (p: Page | null | undefined) => cdp && !!p && !this.attachedPages.has(p);
     on('page', (p: Page) => { this.page = p; this.attachPage(p); this.obs.onPage(p, 'page_opened'); });
     on('console', (m: import('playwright').ConsoleMessage) => {
       if (/favicon/.test(m.location()?.url || '')) return;
-      const text = redactor.text(m.text());
+      if (stranger(m.page())) return;
+      const text = redactor.text(m.text().slice(0, 2000));
       if (m.type() === 'error' || m.type() === 'warning') push(this.evidence.console, `[${m.type()}] ${text}`);
       if (m.type() === 'error' && !/Failed to load resource/.test(text)) this.addLog({ kind: 'console', text });
       const p = m.page() ?? this.page; if (p) this.obs.onConsole(p, m);
     });
     on('weberror', (w: import('playwright').WebError) => {
-      const e = w.error(); const msg = redactor.text(String(e?.message || e));
+      if (stranger(w.page())) return;
+      const e = w.error(); const msg = redactor.text(String(e?.message || e).slice(0, 2000));
       push(this.evidence.pageErrors, msg);
       this.addLog({ kind: 'pageerror', text: msg });
       const p = w.page() ?? this.page; if (p) this.obs.onPageError(p, e);
     });
     // A request counts as in flight until its response headers arrive (bodies the app never reads must not block settle).
     on('request', (r: import('playwright').Request) => {
+      if (foreign(r)) return;
       this.pending.add(r); this.inflight = this.pending.size;
       const p = pageOf(r); if (p) this.obs.onRequest(p, r);
     });
     on('response', (res: import('playwright').Response) => {
       const r = res.request();
+      if (foreign(r)) return;
       this.pending.delete(r); this.inflight = this.pending.size;
       const p = pageOf(r); const rec = p ? this.obs.onResponse(p, res) : undefined;
       const url = rec?.url ?? redactor.networkUrl(r.url());
@@ -158,8 +174,9 @@ export class Session {
         this.addLog({ kind: 'http', method: r.method(), url: r.url(), status: res.status(), text: `${res.status()} ${r.method()} ${url}`, rid: rec?.id });
       if (res.status() >= 400 && !/favicon/.test(r.url())) push(this.evidence.failedRequests, `${res.status()} ${r.method()} ${url}`);
     });
-    on('requestfinished', (r: import('playwright').Request) => { this.pending.delete(r); this.inflight = this.pending.size; this.obs.onFinished(r); });
+    on('requestfinished', (r: import('playwright').Request) => { if (foreign(r)) return; this.pending.delete(r); this.inflight = this.pending.size; this.obs.onFinished(r); });
     on('requestfailed', (r: import('playwright').Request) => {
+      if (foreign(r)) return;
       this.pending.delete(r); this.inflight = this.pending.size;
       const p = pageOf(r); const rec = p ? this.obs.onFailed(p, r) : undefined;
       if (/ERR_ABORTED/.test(r.failure()?.errorText ?? '')) return; // aborts are recorded by the observer, not reported as failures
@@ -174,13 +191,21 @@ export class Session {
     if (this.attachedPages.has(page)) return;
     this.attachedPages.add(page);
     const nav = (f: Frame) => { if (f === page.mainFrame()) this.docGen++; this.obs.onNavigated(page, f); };
-    const closed = () => this.obs.onPage(page, 'page_closed');
+    const closed = () => {
+      this.obs.onPage(page, 'page_closed');
+      // its open requests will never finish: stop waiting for them
+      for (const r of [...this.pending] as import('playwright').Request[]) { try { if (r.frame().page() === page) this.pending.delete(r); } catch { /* no frame: leave it */ } }
+      this.inflight = this.pending.size;
+      // a popup that closes hands control back to the page that is still open
+      if (this.page === page) { const open = this.context?.pages().filter((p) => !p.isClosed()) ?? []; if (open.length) this.page = open[open.length - 1]; }
+    };
     page.on('framenavigated', nav); page.on('close', closed);
     this.detachers.push(() => { page.off('framenavigated', nav); page.off('close', closed); });
   }
 
   async closeContext() {
     for (const d of this.detachers.splice(0)) try { d(); } catch { /* context already gone */ }
+    this.attachedPages = new WeakSet(); // a context that stays open (CDP) must get its page listeners again next time
     if (this.obs && !this.obs.disposed) {
       this.obs.dispose();
       try { await this.onEnd?.(this.obs); } catch (e) { console.error(`fastqa: could not finalize session ${this.obs.sessionId}: ${String(e).split('\n')[0]}`); }

@@ -264,11 +264,13 @@ export async function runStep(session, s, tmpl) {
                 const ok = await poll(async () => {
                     const hits = session.since(session.mark).filter((e) => e.kind === 'http' && (!method || e.method === method) && matches(e.url, urlPart));
                     seen = hits.map((h) => h.text);
-                    const hit = hits.find((h) => okStatus(h.status));
-                    // An assertion that passes on a 4xx/5xx response declares it expected (a negative test): it is not a candidate finding.
-                    if (hit && hit.status >= 400 && hit.rid)
-                        session.obs?.quality.markExpected(hit.rid, `explicit expect_request ${spec} ${want}`);
-                    return !!hit;
+                    const ok = hits.filter((h) => okStatus(h.status));
+                    // An assertion that passes on 4xx/5xx responses declares them expected (a negative test): every response of this
+                    // batch that satisfies it, so two negative submits followed by two assertions are both covered.
+                    for (const h of ok)
+                        if (h.status >= 400 && h.rid)
+                            session.obs?.quality.markExpected(h.rid, `explicit expect_request ${spec} ${want}`);
+                    return ok.length > 0;
                 }, timeout);
                 if (!ok)
                     throw new Error(seen.length ? `request seen but status not ${want}: ${seen.slice(-3).join(' ; ')}` : `no ${method ?? ''} request matching ${q(urlPart)} since this run started`);

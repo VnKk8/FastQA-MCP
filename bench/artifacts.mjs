@@ -26,6 +26,8 @@ const jsonl = (...p) => readFileSync(path.join(...p), 'utf8').split('\n').filter
   has('targeted evidence: only this finding, its events and its request', out, /^findings 1–1 of 1/, 'association: A-2 click "Place order" (inferred)', /E-\d+ response R-\d+ status 500/, /request R-\d+ POST \/api\/notifications\?status=…&delay=… → 500/);
   out = await call('evidence', { view: 'network', finding: 'F-001' });
   check('network view filtered by finding: one row', (out.match(/^R-\d+ /gm) ?? []).length === 1, out);
+  out = await call('evidence', { view: 'network', path: '/api/orders' });
+  has('a trace id sent by the server is kept for log correlation', out, /POST \/api\/orders → 201 .* trace req-demo-123/);
   out = await call('evidence', { view: 'timeline', action: 'A-2' });
   has('timeline filtered by action', out, 'A-2 click "Place order" ✓', /E-\d+ request POST/);
   lacks('timeline filtered by action: nothing else', out, 'A-1 goto');
@@ -94,7 +96,7 @@ const jsonl = (...p) => readFileSync(path.join(...p), 'utf8').split('\n').filter
   has('export: network and error assertions are code, not comments', out, 'const fq = fastqa(page);', 'await fq.expectRequest("POST /api/orders", "201");', 'await fq.expectNoErrors("");', 'await expect(page.locator("#nope")).toBeHidden();');
   has('export: what cannot be exported faithfully is named, never silently dropped', out, '1 step(s) not exported (fastqa replay still enforces them): step 7 expect_hidden', '// fastqa:unsupported step 7: expect_hidden "Ghost button"');
   const parity = json(dir, 'tests', 'parity-ok.parity.json');
-  check('export: machine-readable parity file', parity.executable === 6 && parity.unsupported.length === 1 && parity.unsupported[0].step === 7 && parity.notExported.length === 1 && parity.spec === 'tests/parity-ok.spec.ts', JSON.stringify(parity));
+  check('export: machine-readable parity file', parity.executable === 6 && parity.unsupported.length === 1 && parity.unsupported[0].step === 7 && parity.notExported.length === 2 && parity.spec === 'tests/parity-ok.spec.ts', JSON.stringify(parity));
   out = await call('flow', { action: 'export', name: 'parity-ok', mode: 'strict' });
   has('export strict: refused when a step cannot be exported faithfully', out, /^Export refused \(strict\): 1 step\(s\) cannot be exported faithfully — step 7 expect_hidden/);
 

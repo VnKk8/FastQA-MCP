@@ -6,6 +6,7 @@ import { Session } from './session.js';
 import { STEP_KINDS } from './runner.js';
 import { runBatch, qualityOf, structured, type BatchResult, type QualityResult } from './exec.js';
 import { saveFlow, loadFlow, listFlows, runSuite, exportFlow, recentRuns, FLOW_DIR, type FlowRun } from './flows.js';
+import { pruneScreenshots } from './dirs.js';
 import { auditA11y, renderA11y } from './a11y.js';
 import { ConfigError, loadConfig, describeConfig, type Mode } from './config.js';
 import { redactor } from './privacy/redact.js';
@@ -19,11 +20,11 @@ import { VERSION } from './version.js';
 const session = new Session();
 installServices();
 
-type Result = { content: Array<{ type: 'text'; text: string } | { type: 'image'; data: string; mimeType: string }>; structuredContent?: Record<string, unknown> };
+type Result = { content: Array<{ type: 'text'; text: string } | { type: 'image'; data: string; mimeType: string }>; structuredContent?: Record<string, unknown>; isError?: boolean };
 /** Every text result leaves through here: known secrets and credential patterns are removed at the boundary. */
 const text = (t: string, sc?: Record<string, unknown>): Result => ({
   content: [{ type: 'text' as const, text: redactor.text(t) }],
-  ...(sc && session.cfg?.structuredContent ? { structuredContent: JSON.parse(redactor.text(JSON.stringify(sc))) } : {}),
+  ...(sc && session.cfg?.structuredContent ? { structuredContent: redactor.deep(JSON.parse(JSON.stringify(sc))) } : {}),
 });
 const stripHash = (u: string) => u.split('#')[0];
 
@@ -118,6 +119,7 @@ server.registerTool('act', {
         await fs.mkdir(path.dirname(f), { recursive: true });
         await session.page.screenshot({ path: f, type: 'jpeg', quality: 60, mask: session.maskLocators() });
         shot = `\nscreenshot saved: ${f}`;
+        await pruneScreenshots(session.cfg.artifacts.maxScreenshots).catch(() => {});
       } catch { /* ignore */ }
     }
     tail = shot + '\n--- page now ---\n' + Session.render(snap);
@@ -281,7 +283,7 @@ server.registerTool('flow', {
           ? `\n${parity.unsupported.length} step(s) not exported (fastqa replay still enforces them): ${parity.unsupported.map((u) => `step ${u.step} ${u.do}`).join(', ')}`
           : '';
         return text(`Wrote ${file}${note}\n\n${code}`, { parity });
-      } catch (e: any) { return text(String(e?.message || e)); }
+      } catch (e: any) { return { ...text(String(e?.message || e)), isError: true }; }
     }
   }
 }));
@@ -323,7 +325,7 @@ async function cli(args: string[]) {
   if (!names.length) { console.log('No flows found in ' + FLOW_DIR()); process.exit(2); }
   const many = Array.from({ length: repeat }, () => names).flat();
   const samples: Observer[] = [];
-  const { runs, html, junit } = await runSuite(many, vars, dataset, undefined, { mode, bundle, baseline, onDone: (o) => { samples.push(o); } });
+  const { runs, html, junit } = await runSuite(many, vars, dataset, undefined, { mode, bundle, baseline, onDone: (o) => { if (baseline === 'record') samples.push(o); } });
   for (const r of runs) {
     console.log(redactor.text(`${r.ok ? 'PASS' : 'FAIL'} ${r.name} (${r.ms}ms)`));
     if (!r.ok) r.lines.forEach((l) => console.log(redactor.text('   ' + l)));

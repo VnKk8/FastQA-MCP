@@ -1,5 +1,5 @@
 {
-  "when": "2026-11-27T00:36:26.563Z",
+  "when": "2026-11-27T01:19:21.624Z",
   "node": "v24.11.1",
   "platform": "win32 x64",
   "samples": 30,
@@ -8,25 +8,25 @@
   "toolCount": 8,
   "schemaBytes": 7348,
   "schemaTokensApprox": 1837,
-  "coldTotalMs": 2451.1,
+  "coldTotalMs": 2444.8,
   "warm": {
     "totalMs": {
-      "median": 1480.9,
-      "p95": 1528.8,
-      "min": 1465.3,
-      "max": 1543.5
+      "median": 1484.1,
+      "p95": 1526.2,
+      "min": 1463.3,
+      "max": 1527.2
     },
     "openMs": {
-      "median": 199.6,
-      "p95": 217.9,
-      "min": 183.6,
-      "max": 266.2
+      "median": 200.8,
+      "p95": 215.2,
+      "min": 183.4,
+      "max": 216.2
     },
     "actMs": {
-      "median": 1286.2,
-      "p95": 1326.9,
-      "min": 1266.6,
-      "max": 1327.6
+      "median": 1282.8,
+      "p95": 1313.9,
+      "min": 1264.7,
+      "max": 1324.1
     }
   },
   "responseChars": {
@@ -34,10 +34,10 @@
     "act": 1014
   },
   "replayMs": {
-    "median": 1402.8,
-    "p95": 2063.1,
-    "min": 1371.6,
-    "max": 3646
+    "median": 1403.5,
+    "p95": 1430.8,
+    "min": 1367.9,
+    "max": 1431
   },
-  "serverRssKb": 123420
+  "serverRssKb": 123916
 }

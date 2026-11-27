@@ -7,7 +7,7 @@ import { html as esc } from './privacy/redact.js';
  * Steps and explicit assertions are shown separately from QA findings. In observe mode findings never change a result;
  * in strict mode a policy failure is its own JUnit failure. Everything from the app under test is escaped and sanitized.
  */
-export async function writeReports(runs, dir) {
+export async function writeReports(runs, dir, maxReports = 200) {
     let stamp = new Date().toISOString().replace(/[:.]/g, '-');
     const out = path.join(dir, 'reports');
     await fs.mkdir(out, { recursive: true });
@@ -84,5 +84,14 @@ ${runs.map((r) => `  <testcase classname="fastqa.flows" name="${esc(r.name)}" ti
             console.error(`fastqa: could not update reports/${name}: ${String(e).split('\n')[0]}`);
         }
     }
+    await pruneReports(out, maxReports).catch(() => { });
     return { html: html_p, junit: junit_p };
+}
+/** Keeps the newest `max` timestamped report pairs. Only files named like a fastqa report are ever removed. */
+async function pruneReports(dir, max) {
+    const stamps = [...new Set((await fs.readdir(dir)).map((f) => /^(\d{4}-\d\d-\d\dT[\d-]+Z(?:-\d+)?)\.(?:html|junit\.xml)$/.exec(f)?.[1]).filter((s) => !!s))].sort();
+    for (const s of stamps.slice(0, Math.max(0, stamps.length - max))) {
+        for (const ext of ['html', 'junit.xml'])
+            await fs.rm(path.join(dir, `${s}.${ext}`), { force: true }).catch(() => { });
+    }
 }

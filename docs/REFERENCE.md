@@ -15,9 +15,9 @@ Same journey on the bundled demo shop (login, add to cart, switch currency):
 | Model turns (tool calls) | 10 | **2** | **2** |
 | Tokens returned to the model | ~1,270 | **~310** | ~330 |
 | Tool definitions in the prompt | ~5,300 tokens (25 tools) | **~1,420 tokens (8 tools)** | ~1,840 tokens (8 tools) |
-| Browser-side time, one run (`npm run bench`) | 3.1 s | 2.5 s | 2.7 s |
-| Browser-side time, 30 warm runs, median / p95 (`npm run perf`) | not measured | 1,481 ms / 1,513 ms | 1,481 ms / 1,529 ms |
-| Estimated end-to-end at 3 s per model turn | ~33 s | **~8.5 s** | ~8.7 s |
+| Browser-side time, one run (`npm run bench`) | 3.2 s | 2.5 s | 2.4 s |
+| Browser-side time, 30 warm runs, median / p95 (`npm run perf`) | not measured | 1,481 ms / 1,513 ms | 1,484 ms / 1,526 ms |
+| Estimated end-to-end at 3 s per model turn | ~33 s | **~8.5 s** | ~8.4 s |
 | Replay of the saved flow, median of 30 | needs the model again | **1.4 s, no model** | 1.4 s, no model |
 
 How to read this:
@@ -25,7 +25,7 @@ How to read this:
 - Measured on one machine (Windows 11, Node 24, Chromium 143 headless) against a small local fixture. They are not universal numbers. Reproduce with `npm run bench` and `npm run perf`.
 - "Browser-side time" is the time spent inside tool calls. It is measured. A single run varies by a few tenths of a second; compare builds with the 30-sample row.
 - "End-to-end" adds an **assumed** 3 seconds per model turn. No live model was timed. Most of the difference comes from needing fewer turns, so real results depend on your model, client and site.
-- The observation layer added in this source tree did not change the median browser-side time on this fixture (p95 +1%) and adds one line of text per clean result (`open` +11%, `act` +3% in characters). The tool definitions grew by about 420 tokens (+30%) because `evidence`, `act` and `flow` gained optional parameters. Server memory after the run was 123 MB against 115 MB.
+- The observation layer added in this source tree changed the median and p95 browser-side time on this fixture by less than 1% and adds one line of text per clean result (`open` +11%, `act` +3% in characters). The tool definitions grew by about 420 tokens (+30%) because `evidence`, `act` and `flow` gained optional parameters. Server memory after the run was 124 MB against 115 MB.
 
 ## Why it's faster
 
@@ -154,7 +154,7 @@ What the pieces mean:
   The decision is made when the request **starts**. A response that arrives while a later step runs still belongs to the action that started it.
 - **Late findings.** A response can arrive after its batch returned. The finding then shows up in the next result, under its original id, marked `late`. Until then the QA line says `coverage partial (1 pending)`.
 - **Coverage** is `complete`, `partial` (requests still pending, or events dropped by the retention budget) or `disabled`. It describes what the browser showed in this session. Backend-only traffic, service workers and WebSockets are not covered, and it is never a statement about the whole product.
-- A finding is listed inline once. Repeats raise its count (`×3`). At most 3 are listed inline; the rest are in `evidence`.
+- A finding is listed when it is new. If it happens again in a later batch it is listed again as `known finding seen again`, with its count (`×2 (again)`), so a repeated failure never reads as "clean". A batch in which nothing happened is clean. At most 3 are listed inline; the rest are in `evidence`.
 
 ### Rules
 
@@ -200,7 +200,7 @@ Set it with `quality.mode` in the config, `FASTQA_QUALITY`, `--mode=` on the CLI
 
 **Strict in an interactive session.** `act` reports the policy outcome on its own line: `QA policy (strict): FAILED — …`, `passed`, or `provisional` while requests are still pending. The step result is not rewritten, and a result that was already returned is never changed afterwards; a late failure shows up at the next call.
 
-**Strict in replay (CLI and `flow run`).** The outcome is final. Before deciding, fastqa waits for the requests that are still pending, for at most `quality.finalizeTimeoutMs` (default 3 s). This is a bounded wait for known requests, not a network-idle wait. If something is still pending at the deadline, coverage is partial and `quality.onIncomplete` decides: `fail` (default) or `ignore`.
+**Strict in replay (CLI and `flow run`).** The outcome is final. Before deciding, fastqa waits for the requests that were open when the last step finished, for at most `quality.finalizeTimeoutMs` (default 3 s). This is a bounded wait for those requests, not a network-idle wait: traffic that starts later, such as polling, is neither waited for nor judged. If one of those requests is still open at the deadline, coverage is partial and `quality.onIncomplete` decides: `fail` (default) or `ignore`.
 
 ## Evidence views (unreleased)
 
@@ -260,7 +260,8 @@ Optional: `.fastqa/config.json` (inside `FASTQA_DIR`). A full example is in [con
 | `privacy.secretVars`, `secretKeys`, `maskSelectors` | `[]` | Extra placeholder names, extra secret-looking keys, elements to mask in screenshots. |
 | `locator.strict` | `false` | Reject ambiguous targets by default. |
 | `discovery.enabled`, `pathTemplates` | `false`, `[]` | Collect the observed graph; explicit path templates such as `/products/{slug}`. |
-| `artifacts.enabled` | `false` | Write a session bundle for every session. `maxBytesPerRun` 32 MiB, `retentionDays` 7, `maxRuns` 20, `screenshots` true. |
+| `artifacts.enabled` | `false` | Write a session bundle for every session. `maxBytesPerRun` 32 MiB, `retentionDays` 7, `maxRuns` 20. |
+| `artifacts.screenshots`, `maxScreenshots`, `maxReports` | `true`, 200, 200 | Take failure screenshots; keep only the newest failure screenshots and report pairs. Only files fastqa wrote are ever removed. |
 | `browser.ignoreHTTPSErrors` | `false` with a config file | Accept invalid certificates. Without a config file the 0.3 default (`true`) stays, with a warning on stderr. |
 | `browser.allowedOrigins` | any | Refuse `open` / `goto` to other origins. |
 | `mcp.structuredContent` | `false` | Also return `structuredContent` with `execution`, `assertions` and `quality`. |
@@ -272,10 +273,12 @@ Precedence: defaults, then the config file, then explicit run options (`--mode`,
 Defaults are metadata only: method, sanitized URL, status, timing. No bodies, no headers.
 
 - **Network URLs:** credentials and fragments are removed. Query **values** are removed (`?token=•••&email=…&page=…`) unless the parameter is in `privacy.keepQueryParams`. Secret-looking parameters are always masked.
-- **Known secrets:** values of `FASTQA_VAR_*` variables with secret-looking names, values typed into password fields through a placeholder, and values seen in secret positions (a `token=` parameter, an `Authorization` header, a `password` JSON field) are replaced wherever they appear later, including page text in snapshots. A bound secret shows as its placeholder, e.g. `{{password}}`.
+- **Secrets you supply:** values of `FASTQA_VAR_*` variables with secret-looking names, and values typed into password fields through a placeholder, are replaced wherever they appear later, including page text in snapshots, and are shown as their placeholder, e.g. `{{password}}`. In flow files and exported specs they are written as the placeholder too, so the file stays replayable.
+- **Secrets seen in the application:** a value in a secret position (a `token=` parameter, an `Authorization` header, a `password` JSON field) is replaced by `•••` wherever it appears later. Such values come from the page, so they are only ever masked: they never become a label and never change a flow file or a spec.
+- **What counts as secret-looking:** whole words of a name, such as `password`, `access_token`, `apiKey`, `sessionId`, `card_number`. `author` or `passengers` are not. Add your own with `privacy.secretKeys`.
 - **Patterns:** `Bearer …`, `token=…` and similar are masked in free text such as console output.
 - **One boundary:** every tool result, report, flow file, exported spec and bundle file passes through the same redaction.
-- **Payload capture is opt-in and scoped.** It needs `capture.payloads: "json"` and an origin allowlist. Only JSON responses of fetch/XHR calls are read. Endpoints that look like authentication or payment are skipped unless listed explicitly. Bodies larger than `maxBodyBytes`, of unknown size, or beyond 16 concurrent reads are skipped, and the reason is recorded. Captured JSON is sanitized before it is kept; the raw value is handed to the rules once and dropped. Request bodies are recorded as field names and types only.
+- **Payload capture is opt-in and scoped.** It needs `capture.payloads: "json"` and an origin allowlist. Only JSON responses of fetch/XHR calls are read. Endpoints that look like authentication or payment are skipped unless listed explicitly. Bodies larger than `maxBodyBytes`, of unknown size, or beyond 16 concurrent reads are skipped, and the reason is recorded. A compressed or chunked response counts as unknown size, because its real size is not known before it is read; `capture.allowUnknownLength` reads those too. Captured JSON is sanitized before it is kept; the raw value is handed to the rules once and dropped. Request bodies are recorded as field names and types only.
 - **A rule that needs a payload it could not read is reported as "not evaluated"**, with the reason. It never produces a finding and never counts as a pass.
 
 What this does not guarantee:
@@ -327,6 +330,8 @@ Everything goes in `.fastqa/` (or `FASTQA_DIR`):
 
 Session bundles **(unreleased)** are written when `artifacts.enabled` is set, with `--bundle` on the CLI, or on request with `evidence {report:true}`. They hold sanitized data, relative paths only, and nothing is uploaded anywhere. Retention removes bundles beyond `artifacts.maxRuns` or older than `artifacts.retentionDays`; it only ever removes directories named like a fastqa run id.
 
+Keep `.fastqa/` out of version control, or at least `.fastqa/sessions/`, `.fastqa/reports/` and `.fastqa/artifacts/`: they hold local run data. Flows and `config.json` are the parts worth committing.
+
 Flow files written by 0.3 replay unchanged. New files carry `"schema": 2`; nothing else in the format changed.
 
 ## CI: run recorded flows with no model
@@ -340,7 +345,7 @@ npx fastqa-mcp run checkout --bundle           # (unreleased) leave a session bu
 npx fastqa-mcp config                          # (unreleased) validate and print the effective configuration
 ```
 
-Each run writes `.fastqa/reports/<time>.html` and `.junit.xml`, plus `latest.html` and `latest.junit.xml`. The exit code is 0 when every flow passed, 1 when one failed, 2 for a usage or configuration error.
+Each run writes `.fastqa/reports/<time>.html` and `.junit.xml`, plus `latest.html` and `latest.junit.xml`. The exit code is 0 when every flow passed, 1 when one failed, 2 for a usage or configuration error. An option `run` does not know is a usage error (0.3 ignored it), so a typo such as `--mode=strcit` cannot silently run in the default mode.
 
 **(unreleased)** Reports show steps and assertions separately from QA findings. In observe mode a finding never fails a test case; findings appear in `<system-out>`. In strict mode a policy failure is its own JUnit failure with `type="fastqa.policy"`.
 
@@ -420,7 +425,8 @@ For exploratory testing, give the agent scope and limits yourself, for example: 
 - **Closed** shadow roots (`mode: 'closed'`) can't be reached by any page script or Playwright. Ask devs for `open` mode or a `data-testid` on the host.
 - `expect_count` with a CSS selector only checks the main frame.
 - Without strict mode, semantic targets pick the first visible match.
-- Only one tab is active at a time; popups become the active page. Their requests are observed.
+- Only one tab is active at a time; popups become the active page, and when a popup closes the page that is still open becomes active again. Their requests are observed.
+- Requests made by a service worker are not observed (0.3 did not see them either). With `FASTQA_CDP_URL`, only the tabs fastqa drives are observed.
 - Observation covers what the browser shows: not backend-to-backend calls, not WebSocket messages, not service worker internals.
 - Association is temporal. A timer-driven request of an older action can be attributed to a newer one; it is still only `inferred`.
 - Polling is recognised after a few regular requests. The first ones may be attributed to the action that was running.

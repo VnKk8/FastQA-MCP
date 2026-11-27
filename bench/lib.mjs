@@ -7,7 +7,8 @@ import { promisify } from 'node:util';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
-export const DIST = path.resolve('dist/index.js');
+/** The build under test. FASTQA_TEST_DIST points the suites at another build (used to show a regression test failing on an older one). */
+export const DIST = path.resolve(process.env.FASTQA_TEST_DIST || 'dist/index.js');
 
 /** Starts a fastqa server with its own FASTQA_DIR. `config` is written to <dir>/config.json before the server starts. */
 export async function connect({ env = {}, config, dir, prefix = 'fq-' } = {}) {

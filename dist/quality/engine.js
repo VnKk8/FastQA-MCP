@@ -26,10 +26,11 @@ export class QualityEngine {
     n = 0;
     /** rule or check id -> why it could not be evaluated (e.g. payload not captured) */
     notEvaluated = new Map();
-    /** findings with id counter above this were not yet shown inline */
-    shown = 0;
-    repeats = 0;
+    /** finding id -> open (unexplained) occurrences that were already shown inline */
+    surfaced = new Map();
     expectedMarks = new Set();
+    /** findings beyond the cap are counted, not stored: one finding per distinct endpoint or message must stay bounded */
+    findingsDropped = 0;
     calls = new Map();
     stateChecks = [];
     contract;
@@ -49,10 +50,13 @@ export class QualityEngine {
             if (!endpointMatches(l, rec.method, rec.path))
                 return;
             const per = l.per ?? 'action';
-            const scope = per === 'action' ? rec.association.actionId : rec.batchId;
+            // an ambiguous request still counts, under its first candidate action
+            const scope = per === 'action' ? rec.association.actionId ?? rec.association.candidateActionIds?.[0] : rec.batchId;
             if (!scope)
                 return;
             const key = `${i}|${scope}`;
+            if (this.calls.size > 5000)
+                this.calls.clear();
             const count = (this.calls.get(key) ?? 0) + 1;
             this.calls.set(key, count);
             if (count === l.max + 1)
@@ -161,34 +165,46 @@ export class QualityEngine {
                 this.skip(r.id, `response body not available (${rec.body?.reason ?? rec.body?.state ?? 'capture off'})`);
                 continue;
             }
-            const got = jsonPointer(raw, r.jsonPointer);
-            let ok = true;
-            let expected = '';
-            if (r.exists !== undefined) {
-                ok = got.found === r.exists;
-                expected = `${r.jsonPointer} ${r.exists ? 'present' : 'absent'}`;
+            try {
+                const got = jsonPointer(raw, r.jsonPointer);
+                let ok = true;
+                let expected = '';
+                if (r.exists !== undefined) {
+                    ok = got.found === r.exists;
+                    expected = `${r.jsonPointer} ${r.exists ? 'present' : 'absent'}`;
+                }
+                if (ok && 'equals' in r && r.equals !== undefined) {
+                    ok = got.found && same(got.value, r.equals);
+                    expected = `${r.jsonPointer} = ${show(r.equals)}`;
+                }
+                if (ok && 'notEquals' in r && r.notEquals !== undefined) {
+                    ok = !got.found || !same(got.value, r.notEquals);
+                    expected = `${r.jsonPointer} ≠ ${show(r.notEquals)}`;
+                }
+                if (ok)
+                    continue;
+                // the comparison used the raw value; what is shown comes from the sanitized copy
+                const shown = jsonPointer(rec.body?.json, r.jsonPointer);
+                const actual = got.found ? `${r.jsonPointer} = ${shown.found ? show(shown.value) : '(not shown)'}` : `${r.jsonPointer} is missing`;
+                this.report({
+                    ruleId: 'BUSINESS-ERROR', severity: r.severity ?? 'high', rec, association: rec.association, signature: r.id,
+                    title: `${r.id}: ${rec.method} ${rec.route} → HTTP ${rec.status} but ${actual}`, actual, expected: `${expected} (configured rule ${r.id})`,
+                });
             }
-            if (ok && 'equals' in r && r.equals !== undefined) {
-                ok = got.found && same(got.value, r.equals);
-                expected = `${r.jsonPointer} = ${show(r.equals)}`;
+            catch {
+                this.skip(r.id, 'the rule could not be evaluated on this response (too deep or not serializable)');
             }
-            if (ok && 'notEquals' in r && r.notEquals !== undefined) {
-                ok = !got.found || !same(got.value, r.notEquals);
-                expected = `${r.jsonPointer} ≠ ${show(r.notEquals)}`;
-            }
-            if (ok)
-                continue;
-            const actual = got.found ? `${r.jsonPointer} = ${show(got.value)}` : `${r.jsonPointer} is missing`;
-            this.report({
-                ruleId: 'BUSINESS-ERROR', severity: r.severity ?? 'high', rec, association: rec.association, signature: r.id,
-                title: `${r.id}: ${rec.method} ${rec.route} → HTTP ${rec.status} but ${actual}`, actual, expected: `${expected} (configured rule ${r.id})`,
-            });
         }
         if (this.contract?.wantsBody(rec)) {
-            if (captured)
-                this.contractIssues(this.contract.checkBody(rec, raw), rec);
-            else
+            if (!captured)
                 this.skip('CONTRACT-SCHEMA', `response body not available (${rec.body?.reason ?? rec.body?.state ?? 'capture off'})`);
+            else
+                try {
+                    this.contractIssues(this.contract.checkBody(rec, raw), rec);
+                }
+                catch {
+                    this.skip('CONTRACT-SCHEMA', 'the schema could not be evaluated on this response');
+                }
         }
     }
     contractIssues(out, rec, ev) {
@@ -239,37 +255,37 @@ export class QualityEngine {
                 if (f.requestIds.length > 12)
                     f.requestIds.splice(4, 1);
             }
-            // a later occurrence without a clear action (background, ambiguous) lowers the confidence of the whole finding
+            // a later occurrence without a clear action lowers the confidence; the action first associated stays visible
             const conf = d.confidence ?? confidenceOf(d.association);
-            if (confRank[conf] < confRank[f.confidence]) {
+            if (confRank[conf] < confRank[f.confidence])
                 f.confidence = conf;
-                f.association = d.association;
-            }
-            if (policy.status === 'expected')
-                f.expectedOccurrences++;
-            if (policy.status === 'suppressed') {
-                f.status = 'suppressed';
-                f.statusReason = policy.reason;
-            }
-            else
-                this.restatus(f, policy.reason);
-            this.repeats++;
-            return f;
         }
-        const batchId = rec?.batchId ?? d.ev?.batchId;
-        f = {
-            schemaVersion: 1, id: `F-${String(++this.n).padStart(3, '0')}`, ruleId: d.ruleId, ruleVersion: ruleVersion(d.ruleId),
-            severity: d.severity, confidence: d.confidence ?? confidenceOf(d.association),
-            status: policy.status, statusReason: policy.reason,
-            title: d.title, expected: d.expected, actual: d.actual, association: d.association,
-            batchId, scope: this.ctx.scopeOf(batchId), evidenceIds: evIds, requestIds: rec ? [rec.id] : [],
-            fingerprint: fp, occurrences: 1, expectedOccurrences: policy.status === 'expected' ? 1 : 0,
-            firstSequence: seq, lastSequence: seq, firstAt: at, lastAt: at,
-            late: batchId !== undefined && batchId !== this.ctx.currentBatchId() ? true : undefined,
-            endpoint: rec ? { method: rec.method, route: rec.route, origin: rec.origin, status: rec.status } : undefined,
-        };
-        this.findings.push(f);
-        this.byFp.set(fp, f);
+        else {
+            if (this.findings.length >= MAX_FINDINGS) {
+                this.findingsDropped++;
+                return undefined;
+            }
+            const batchId = rec?.batchId ?? d.ev?.batchId;
+            f = {
+                schemaVersion: 1, id: `F-${String(++this.n).padStart(3, '0')}`, ruleId: d.ruleId, ruleVersion: ruleVersion(d.ruleId),
+                severity: d.severity, confidence: d.confidence ?? confidenceOf(d.association),
+                status: 'candidate', title: d.title, expected: d.expected, actual: d.actual, association: d.association,
+                batchId, scope: this.ctx.scopeOf(batchId), evidenceIds: evIds, requestIds: rec ? [rec.id] : [],
+                fingerprint: fp, occurrences: 1, expectedOccurrences: 0, suppressedOccurrences: 0,
+                firstSequence: seq, lastSequence: seq, firstAt: at, lastAt: at,
+                // late = the result of its batch had already been returned when this was observed
+                late: batchId !== undefined && batchId !== this.ctx.currentBatchId() && this.ctx.isReported(batchId) ? true : undefined,
+                endpoint: rec ? { method: rec.method, route: rec.route, origin: rec.origin, status: rec.status } : undefined,
+            };
+            this.findings.push(f);
+            this.byFp.set(fp, f);
+        }
+        // policy applies to this occurrence only: one suppressed or expected occurrence never hides another one
+        if (policy.status === 'expected')
+            f.expectedOccurrences++;
+        if (policy.status === 'suppressed')
+            f.suppressedOccurrences++;
+        this.restatus(f, policy.reason);
         return f;
     }
     classify(d) {
@@ -295,15 +311,19 @@ export class QualityEngine {
         }
         return { status: 'candidate' };
     }
+    /** open = occurrences that no policy and no assertion explained. Any open occurrence keeps the finding a candidate. */
+    open(f) { return f.occurrences - f.expectedOccurrences - f.suppressedOccurrences; }
     restatus(f, reason) {
-        if (f.status === 'suppressed')
-            return;
-        const expected = f.expectedOccurrences >= f.occurrences;
-        f.status = expected ? 'expected' : 'candidate';
-        if (expected && reason)
-            f.statusReason = reason;
-        if (!expected)
-            f.statusReason = f.expectedOccurrences ? `${f.expectedOccurrences} of ${f.occurrences} occurrences were expected` : undefined;
+        if (this.open(f) > 0) {
+            f.status = 'candidate';
+            const parts = [f.expectedOccurrences ? `${f.expectedOccurrences} expected` : '', f.suppressedOccurrences ? `${f.suppressedOccurrences} suppressed` : ''].filter(Boolean);
+            f.statusReason = parts.length ? `${parts.join(', ')} of ${f.occurrences} occurrences` : undefined;
+        }
+        else {
+            f.status = f.suppressedOccurrences > 0 ? 'suppressed' : 'expected';
+            if (reason)
+                f.statusReason = reason;
+        }
     }
     /** An explicit expect_request assertion passed on this response: the agent declared it as expected (a negative test). */
     markExpected(requestId, reason) {
@@ -311,8 +331,10 @@ export class QualityEngine {
             if ((f.ruleId !== 'NET-4XX' && f.ruleId !== 'NET-5XX') || !f.requestIds.includes(requestId))
                 continue;
             const key = `${f.id}|${requestId}`;
-            if (this.expectedMarks.has(key))
+            if (this.expectedMarks.has(key) || this.open(f) <= 0)
                 continue;
+            if (this.expectedMarks.size > 5000)
+                this.expectedMarks.clear();
             this.expectedMarks.add(key);
             f.expectedOccurrences++;
             this.restatus(f, reason);
@@ -320,13 +342,27 @@ export class QualityEngine {
     }
     // ---------------------------------------------------------------- views
     candidates(min = 'info') { return this.findings.filter((f) => f.status === 'candidate' && sevRank(f.severity) >= sevRank(min)); }
-    /** Findings not yet shown inline, most important first, and marks them shown. */
+    /**
+     * What the next result must show, most important first: findings never shown before (fresh) and known findings
+     * that happened again since they were last shown (recurring). A repeat of a failure is never reported as "clean".
+     */
     takeNew() {
-        const fresh = this.findings.filter((f) => Number(f.id.slice(2)) > this.shown && f.status === 'candidate').sort(byImportance);
-        this.shown = this.n;
-        const repeats = this.repeats;
-        this.repeats = 0;
-        return { fresh, repeats };
+        const fresh = [];
+        const recurring = [];
+        for (const f of this.findings) {
+            const open = this.open(f);
+            const seen = this.surfaced.get(f.id);
+            if (f.status !== 'candidate') {
+                if (seen !== undefined)
+                    this.surfaced.set(f.id, Math.min(seen, open));
+                continue;
+            }
+            if (seen !== undefined && open <= seen)
+                continue;
+            (seen === undefined ? fresh : recurring).push(f);
+            this.surfaced.set(f.id, open);
+        }
+        return { fresh: fresh.sort(byImportance), recurring: recurring.sort(byImportance) };
     }
     policy(o) {
         if (!this.cfg.enforce)
@@ -344,6 +380,8 @@ export class QualityEngine {
     }
 }
 const confRank = { low: 0, medium: 1, high: 2 };
+/** one finding per distinct endpoint or message: capped so a page that logs unique errors cannot grow the list forever */
+const MAX_FINDINGS = 500;
 export const byImportance = (a, b) => sevRank(b.severity) - sevRank(a.severity) || confRank[b.confidence] - confRank[a.confidence] || a.firstSequence - b.firstSequence;
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 const show = (v) => { const s = JSON.stringify(v) ?? 'undefined'; return s.length > 60 ? s.slice(0, 57) + '…' : s; };
