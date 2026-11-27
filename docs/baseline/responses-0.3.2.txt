@@ -1,0 +1,180 @@
+### open {"url":"{{base}}/login"}
+url: {{base}}/login
+title: Login – DemoShop
+e1 link "Home"
+e2 link "Products"
+e3 link "Help"
+h1 "Sign in"
+e4 textbox "Email" [required]
+e5 textbox "Password" [required]
+e6 checkbox "Remember me"
+e7 button "Log in"
+e8 link "Terms"
+e9 link "Privacy"
+(Nms)
+
+### act {"steps":[{"do":"fill","target":"Email","value":"john@example.com"},{"do":"fill","target":"Password","value":"{{password}}"},{"do":"click","target":"Log in"},{"do":"expect_url","value":"/account"},{"do":"check","target":"css=#card-tshirt .tc"},{"do":"click","target":"Add Blue T-shirt to cart"},{"do":"expect_request","target":"POST /api/cart/tshirt","value":"2xx"},{"do":"expect_text","value":"Added to cart: Blue T-shirt"},{"do":"select","target":"Currency","value":"GBP"},{"do":"expect_value","target":"Currency","value":"GBP"},{"do":"expect_no_errors"}]}
+PASSED 11/11 steps in Nms
+✓ fill "Email" "john@example.com" (Nms)
+✓ fill "Password" "•••" (Nms)
+✓ click "Log in" (Nms)
+✓ expect_url "/account" (Nms)
+✓ check "css=#card-tshirt .tc" (Nms)
+✓ click "Add Blue T-shirt to cart" (Nms)
+✓ expect_request "POST /api/cart/tshirt" "2xx" (Nms)
+✓ expect_text "Added to cart: Blue T-shirt" (Nms)
+✓ select "Currency" "GBP" (Nms)
+✓ expect_value "Currency" "GBP" (Nms)
+✓ expect_no_errors (Nms)
+--- navigated, new page ---
+url: {{base}}/account
+title: Account – DemoShop
+e10 link "Account"
+e11 link "Products"
+e12 link "Orders"
+e13 button "Account menu"
+h1 "Welcome back, John"
+e14 combobox "Currency" ="GBP" options:EUR|GBP|USD
+h2 "Recommended for you"
+h3 "Blue T-shirt"
+e15 checkbox "I have checked the size and colour" [checked]
+status "Added to cart: Blue T-shirt"
+h3 "Coffee mug"
+e16 checkbox "I have checked the size and colour"
+e17 button "Add Coffee mug to cart" [disabled]
+h3 "Grey hoodie"
+e18 checkbox "I have checked the size and colour"
+e19 button "Add Grey hoodie to cart" [disabled]
+
+### flow {"action":"save","name":"legacy-shop"}
+Saved 12 steps to <FASTQA_DIR>\flows\legacy-shop.json
+
+### flow {"action":"show","name":"legacy-shop"}
+1. goto "{{base}}/login"
+2. fill "Email" "john@example.com"
+3. fill "Password" "{{password}}"
+4. click "Log in"
+5. expect_url "/account"
+6. check "css=#card-tshirt .tc"
+7. click "Add Blue T-shirt to cart"
+8. expect_request "POST /api/cart/tshirt" "2xx"
+9. expect_text "Added to cart: Blue T-shirt"
+10. select "Currency" "GBP"
+11. expect_value "Currency" "GBP"
+12. expect_no_errors
+
+### act {"steps":[{"do":"check","target":"css=#card-hoodie .tc"},{"do":"click","target":"Add Grey hoodie to cart"},{"do":"expect_text","value":"Added to cart: Grey hoodie","timeout":1500}]}
+FAILED at step 3/3 after Nms
+✓ check "css=#card-hoodie .tc" (Nms)
+✓ click "Add Grey hoodie to cart" (Nms)
+✗ expect_text "Added to cart: Grey hoodie" — text "Added to cart: Grey hoodie" not found. Visible text starts: "Account Products Orders 👤 Welcome back, John Cart total: 19.99 EUR Currency Recommended for you Blue T-shirt 19.99 EUR I have checked the size and colour Added to cart: Blue T-shirt Coffee mug 9.99 EUR I have checked the size and colour Add Coffee mug to cart Grey hoodie 39.99 EUR I have checked th"
+screenshot saved: <FASTQA_DIR>\artifacts\fail-N.jpg
+--- page now ---
+url: {{base}}/account
+title: Account – DemoShop
+e10 link "Account"
+e11 link "Products"
+e12 link "Orders"
+e13 button "Account menu"
+h1 "Welcome back, John"
+e14 combobox "Currency" ="GBP" options:EUR|GBP|USD
+h2 "Recommended for you"
+h3 "Blue T-shirt"
+e15 checkbox "I have checked the size and colour" [checked]
+status "Added to cart: Blue T-shirt"
+h3 "Coffee mug"
+e16 checkbox "I have checked the size and colour"
+e17 button "Add Coffee mug to cart" [disabled]
+h3 "Grey hoodie"
+e18 checkbox "I have checked the size and colour" [checked]
+e19 button "Retry"
+status "Could not add to cart"
+⚠ 2 JS error(s), 1 failed request(s) so far — call evidence for details
+
+### evidence {}
+page errors (0)
+console (2)
+  [error] Failed to load resource: the server responded with a status of 500 (Internal Server Error)
+  [error] add to cart failed 500
+failed requests (1)
+  500 POST {{base}}/api/cart/hoodie
+
+### evidence {}
+page errors (0)
+console (0)
+failed requests (0)
+
+### snapshot {"mode":"interactive"}
+url: {{base}}/account
+title: Account – DemoShop
+e10 link "Account"
+e11 link "Products"
+e12 link "Orders"
+e13 button "Account menu"
+h1 "Welcome back, John"
+e14 combobox "Currency" ="GBP" options:EUR|GBP|USD
+h2 "Recommended for you"
+h3 "Blue T-shirt"
+e15 checkbox "I have checked the size and colour" [checked]
+status "Added to cart: Blue T-shirt"
+h3 "Coffee mug"
+e16 checkbox "I have checked the size and colour"
+e17 button "Add Coffee mug to cart" [disabled]
+h3 "Grey hoodie"
+e18 checkbox "I have checked the size and colour" [checked]
+e19 button "Retry"
+status "Could not add to cart"
+
+### flow {"action":"run","name":"legacy-shop"}
+1/1 flows passed
+PASS legacy-shop (Nms)
+report: <FASTQA_DIR>\reports\<stamp>.html
+junit: <FASTQA_DIR>\reports\<stamp>.junit.xml
+
+### flow {"action":"run","name":"legacy-shop","vars":{"password":"wrong"}}
+0/1 flows passed
+FAIL legacy-shop (Nms)
+    1. ✓ goto "{{base}}/login" (Nms)
+    2. ✓ fill "Email" "john@example.com" (Nms)
+    3. ✓ fill "Password" "•••" (Nms)
+    4. ✓ click "Log in" (Nms)
+    5. ✗ expect_url "/account" — url is "{{base}}/login", expected "/account"
+   screenshot: <FASTQA_DIR>\artifacts\legacy-shop-1795735777983.jpg
+   evidence: [error] Failed to load resource: the server responded with a status of 401 (Unauthorized) | 401 POST {{base}}/api/login
+report: <FASTQA_DIR>\reports\<stamp>.html
+junit: <FASTQA_DIR>\reports\<stamp>.junit.xml
+
+### flow {"action":"list"}
+legacy-shop
+
+### close {}
+closed
+
+### cli run legacy-shop --var=base={{base}}
+exit=0
+PASS legacy-shop (Nms)
+1/1 passed
+report: <FASTQA_DIR>\reports\<stamp>.html
+junit:  <FASTQA_DIR>\reports\<stamp>.junit.xml
+
+### cli run legacy-shop --var=base={{base}} --var=password=wrong
+exit=1
+FAIL legacy-shop (Nms)
+    1. ✓ goto "{{base}}/login" (Nms)
+    2. ✓ fill "Email" "john@example.com" (Nms)
+    3. ✓ fill "Password" "•••" (Nms)
+    4. ✓ click "Log in" (Nms)
+    5. ✗ expect_url "/account" — url is "{{base}}/login", expected "/account"
+   evidence: [error] Failed to load resource: the server responded with a status of 401 (Unauthorized)
+   evidence: 401 POST {{base}}/api/login
+0/1 passed
+report: <FASTQA_DIR>\reports\<stamp>.html
+junit:  <FASTQA_DIR>\reports\<stamp>.junit.xml
+
+### cli run no-such-flow
+exit=2
+stderr: Error: ENOENT: no such file or directory, open '<FASTQA_DIR>\flows\no-such-flow.json'
+
+### cli --version
+exit=0
+0.3.2

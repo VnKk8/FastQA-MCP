@@ -1,0 +1,70 @@
+{
+  "name": "legacy-shop",
+  "created": "2026-11-26T23:29:28.676Z",
+  "steps": [
+    {
+      "do": "goto",
+      "value": "{{base}}/login",
+      "code": "await page.goto(\"{{base}}/login\");"
+    },
+    {
+      "do": "fill",
+      "target": "Email",
+      "value": "john@example.com",
+      "code": "await page.getByLabel(\"Email\", { exact: true }).first().fill(\"john@example.com\");"
+    },
+    {
+      "do": "fill",
+      "target": "Password",
+      "value": "{{password}}",
+      "code": "await page.getByLabel(\"Password\", { exact: true }).first().fill(`${process.env.FASTQA_VAR_password ?? \"\"}`);"
+    },
+    {
+      "do": "click",
+      "target": "Log in",
+      "code": "await page.getByRole('button', { name: \"Log in\", exact: true }).first().click();"
+    },
+    {
+      "do": "expect_url",
+      "value": "/account",
+      "code": "await expect(page).toHaveURL(new RegExp(\"/account\"));"
+    },
+    {
+      "do": "check",
+      "target": "css=#card-tshirt .tc",
+      "code": "await page.locator(\"#card-tshirt .tc\").check();"
+    },
+    {
+      "do": "click",
+      "target": "Add Blue T-shirt to cart",
+      "code": "await page.getByRole('button', { name: \"Add Blue T-shirt to cart\", exact: true }).first().click();"
+    },
+    {
+      "do": "expect_request",
+      "target": "POST /api/cart/tshirt",
+      "value": "2xx",
+      "code": "// expect_request POST /api/cart/tshirt 2xx — checked by fastqa (wrap the triggering action in page.waitForResponse for a native assertion)"
+    },
+    {
+      "do": "expect_text",
+      "value": "Added to cart: Blue T-shirt",
+      "code": "await expect(page.getByText(\"Added to cart: Blue T-shirt\").first()).toBeVisible();"
+    },
+    {
+      "do": "select",
+      "target": "Currency",
+      "value": "GBP",
+      "code": "await page.getByLabel(\"Currency\", { exact: true }).first().selectOption(\"GBP\");"
+    },
+    {
+      "do": "expect_value",
+      "target": "Currency",
+      "value": "GBP",
+      "code": "await expect(page.getByLabel(\"Currency\", { exact: true }).first()).toHaveValue(\"GBP\");"
+    },
+    {
+      "do": "expect_no_errors",
+      "code": "// expect_no_errors — checked by fastqa"
+    }
+  ]
+}

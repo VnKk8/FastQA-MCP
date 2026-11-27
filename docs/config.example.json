@@ -1,0 +1,46 @@
+{
+  "schemaVersion": 1,
+  "quality": {
+    "mode": "observe",
+    "firstPartyOrigins": ["https://api.shop.example.test"],
+    "expectedResponses": [
+      { "method": "POST", "path": "/api/orders", "statuses": [422], "scope": "invalid-order-test", "reason": "Negative validation test" }
+    ],
+    "suppressions": [
+      { "id": "SHOP-1234", "ruleId": "NET-5XX", "path": "/api/notifications", "reason": "Known: notification service is being replaced", "expires": "2027-03-31" }
+    ],
+    "businessRules": [
+      { "id": "ORDER-SUCCESS", "method": "POST", "path": "/api/orders", "status": 200, "jsonPointer": "/success", "equals": true }
+    ],
+    "failOnSeverity": "high",
+    "finalizeTimeoutMs": 3000,
+    "onIncomplete": "fail",
+    "performance": {
+      "endpoints": [{ "method": "GET", "path": "/api/search", "maxMs": 800 }],
+      "maxCalls": [{ "method": "GET", "path": "/api/prices", "max": 1, "per": "action" }],
+      "baseline": { "factor": 2, "minDeltaMs": 200, "minSamples": 5 }
+    },
+    "stateRules": [
+      { "id": "ORDER-ROW", "after": { "method": "POST", "path": "/api/orders", "status": 201 }, "expectText": "Order ", "withinMs": 2000 }
+    ],
+    "contracts": [{ "origin": "https://api.shop.example.test", "spec": "contracts/shop-openapi.json" }]
+  },
+  "capture": {
+    "payloads": "json",
+    "allowedOrigins": ["https://api.shop.example.test"],
+    "allowedEndpoints": [{ "method": "POST", "path": "/api/orders" }, { "path": "/api/orders/{id}" }],
+    "maxBodyBytes": 16384,
+    "allowUnknownLength": false
+  },
+  "privacy": {
+    "keepQueryParams": ["page", "sort"],
+    "secretVars": ["customerEmail"],
+    "secretKeys": ["iban"],
+    "maskSelectors": ["#card-number"]
+  },
+  "locator": { "strict": true },
+  "discovery": { "enabled": false, "pathTemplates": ["/products/{slug}"] },
+  "artifacts": { "enabled": false, "maxBytesPerRun": 33554432, "retentionDays": 7, "maxRuns": 20, "screenshots": true },
+  "browser": { "ignoreHTTPSErrors": false, "allowedOrigins": ["https://shop.example.test", "https://api.shop.example.test"] },
+  "mcp": { "structuredContent": false }
+}

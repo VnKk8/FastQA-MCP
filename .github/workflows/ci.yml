@@ -26,6 +26,12 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npx playwright install --with-deps chromium
-      - run: npm test
+      - name: Run the tests
+        run: |
+          set -o pipefail
+          npm test 2>&1 | tee test.log
+      - name: Show failed checks as annotations
+        if: failure()
+        run: node bench/ci-annotate.mjs test.log
       - name: Check that the committed dist/ matches the source
         run: git diff --exit-code -- dist

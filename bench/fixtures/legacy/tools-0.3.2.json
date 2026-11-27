@@ -1,0 +1,239 @@
+[
+  {
+    "name": "open",
+    "description": "Open a URL in the QA browser and return a compact snapshot: one line per element, e.g. `e4 textbox \"Email\" [required]`. Shadow DOM content is inlined; iframes appear as indented `frame \"…\"` blocks. Refs (eN) can be used as targets in act. Starts recording a new tape for flow save.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "url": {
+          "type": "string",
+          "description": "URL to open"
+        },
+        "fresh": {
+          "type": "boolean",
+          "description": "New isolated context (clears cookies/storage). Default false."
+        },
+        "device": {
+          "type": "string",
+          "description": "Emulate a device, e.g. \"iPhone 13\", \"Pixel 7\", \"iPad Mini\". \"\" = back to desktop."
+        }
+      },
+      "required": [
+        "url"
+      ],
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    },
+    "execution": {
+      "taskSupport": "forbidden"
+    }
+  },
+  {
+    "name": "act",
+    "description": "Run MANY steps in ONE call (fill a whole form, submit, assert) — this is what makes fastqa fast. Targets resolve by ref, label, placeholder, role+name or text — also inside open shadow DOM and iframes — so you usually do not need a snapshot first. Stops at the first failing step and then returns a full snapshot so you can recover. Otherwise returns only what changed on the page (+ added / - removed lines). expect_* steps are QA assertions that poll until they pass or time out. expect_request checks an API call happened with the right status, expect_no_errors fails on JS errors / 5xx since the batch started, expect_accessible runs a WCAG check.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "steps": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "do": {
+                "type": "string",
+                "enum": [
+                  "goto",
+                  "click",
+                  "dblclick",
+                  "hover",
+                  "fill",
+                  "type",
+                  "press",
+                  "select",
+                  "check",
+                  "uncheck",
+                  "wait",
+                  "expect_text",
+                  "expect_no_text",
+                  "expect_url",
+                  "expect_title",
+                  "expect_value",
+                  "expect_visible",
+                  "expect_hidden",
+                  "expect_enabled",
+                  "expect_disabled",
+                  "expect_count",
+                  "expect_request",
+                  "expect_no_errors",
+                  "expect_accessible"
+                ]
+              },
+              "target": {
+                "type": "string",
+                "description": "ref \"e5\", visible text/label like \"Log in\" or \"Email\", or a selector: \"#id\", \"css=..\", \"testid=..\". expect_request: \"POST /api/orders\" or \"/regex/\". expect_no_errors: optional text to ignore."
+              },
+              "value": {
+                "type": "string",
+                "description": "text to fill, key to press, option to select, url, expected text/url (use /regex/ for regex). {{name}} reads env FASTQA_VAR_name so secrets never pass through the model. expect_request: status \"200\"/\"2xx\"/\"<400\". expect_no_errors: \"strict\" also fails on 4xx. expect_accessible: lowest failing impact, default \"serious\"."
+              },
+              "timeout": {
+                "type": "number",
+                "description": "ms, default 5000"
+              },
+              "frame": {
+                "type": "string",
+                "description": "only search inside this iframe (title, name, id or src fragment). Usually not needed: targets are searched in the page, shadow DOM and all iframes."
+              }
+            },
+            "required": [
+              "do"
+            ],
+            "additionalProperties": false
+          },
+          "minItems": 1,
+          "maxItems": 50
+        },
+        "snapshot": {
+          "type": "string",
+          "enum": [
+            "diff",
+            "full",
+            "none"
+          ],
+          "description": "What to return after the steps. Default diff."
+        }
+      },
+      "required": [
+        "steps"
+      ],
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    },
+    "execution": {
+      "taskSupport": "forbidden"
+    }
+  },
+  {
+    "name": "snapshot",
+    "description": "Compact page snapshot. mode=interactive (default): controls, headings, alerts. mode=full: also visible text. root=css to scope to part of the page.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "mode": {
+          "type": "string",
+          "enum": [
+            "interactive",
+            "full"
+          ]
+        },
+        "root": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    },
+    "execution": {
+      "taskSupport": "forbidden"
+    }
+  },
+  {
+    "name": "screenshot",
+    "description": "JPEG screenshot. Only use when layout/visuals matter — text snapshots are much cheaper.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "target": {
+          "type": "string",
+          "description": "element to capture (ref/text/selector)"
+        },
+        "full_page": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    },
+    "execution": {
+      "taskSupport": "forbidden"
+    }
+  },
+  {
+    "name": "audit",
+    "description": "Accessibility check (axe-core, WCAG 2.1 A/AA) of the current page and its iframes. Returns violations grouped by impact.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {},
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    },
+    "execution": {
+      "taskSupport": "forbidden"
+    }
+  },
+  {
+    "name": "evidence",
+    "description": "JS errors, console errors/warnings and failed HTTP requests (>=400) collected since the last call. Use for bug reports.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {},
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    },
+    "execution": {
+      "taskSupport": "forbidden"
+    }
+  },
+  {
+    "name": "flow",
+    "description": "Record & replay without the model. start: begin a new recording tape. save: store the steps recorded since open/start as a named flow. run: replay a flow (or \"*\" for all) in an isolated context, no LLM calls, returns pass/fail per step. list / show: inspect flows. export: write a Playwright Test .spec.ts.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "action": {
+          "type": "string",
+          "enum": [
+            "start",
+            "save",
+            "run",
+            "list",
+            "show",
+            "export"
+          ]
+        },
+        "name": {
+          "type": "string"
+        },
+        "vars": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "values for {{placeholders}} when running"
+        },
+        "dataset": {
+          "type": "string",
+          "description": "run: CSV file (or name in .fastqa/data/) — the flow runs once per row, columns fill {{placeholders}}"
+        }
+      },
+      "required": [
+        "action"
+      ],
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    },
+    "execution": {
+      "taskSupport": "forbidden"
+    }
+  },
+  {
+    "name": "close",
+    "description": "Close the browser.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {},
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    },
+    "execution": {
+      "taskSupport": "forbidden"
+    }
+  }
+]

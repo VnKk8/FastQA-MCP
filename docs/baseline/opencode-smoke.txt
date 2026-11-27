@@ -1,0 +1,18 @@
+# OpenCode smoke test of the local build (not the npm package)
+# Client: OpenCode 1.19.0, model opencode/big-pickle (free), project config in a temporary folder with edit, bash and webfetch denied.
+# Server: node <repo>/dist/index.js over stdio. Fixture: demo shop /orders?notify=500 on 127.0.0.1.
+# 'opencode mcp list' reported: fastqa connected. Transcript of 'opencode run' follows (tool calls, then the model's four-line answer).
+
+> build · big-pickle
+
+⚙ fastqa_open {"url":"http://127.0.0.1:4399/orders?notify=500","fresh":true}
+⚙ fastqa_act {"steps":[{"do":"click","target":"Place order"},{"do":"expect_text","value":"Thank you for your
+order"}]}
+⚙ fastqa_evidence {"finding":"F-001","details":true}
+⚙ fastqa_flow {"action":"save","name":"opencode-smoke"}
+⚙ fastqa_flow {"action":"run","name":"opencode-smoke"}
+⚙ fastqa_close Unknown
+PASSED 2/2 steps in 326ms
+QA: 1 new candidate finding (highest HIGH) · 2 requests observed
+F-001 HIGH NET-5XX · candidate · confidence medium · ×1
+1/1 flows passed

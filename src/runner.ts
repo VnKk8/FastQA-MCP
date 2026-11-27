@@ -1,5 +1,6 @@
 import { auditA11y } from './a11y.js';
-import { Session, DEFAULT_TIMEOUT, sleep, type Step, type RecordedStep } from './session.js';
+import { Session, DEFAULT_TIMEOUT, sleep, AmbiguousTargetError, warnLegacyTls, type Step, type RecordedStep } from './session.js';
+import { redactor } from './privacy/redact.js';
 
 export const STEP_KINDS = [
   'goto', 'click', 'dblclick', 'hover', 'fill', 'type', 'press', 'select', 'check', 'uncheck', 'wait',
@@ -20,7 +21,7 @@ const q = JSON.stringify;
 async function poll(check: () => Promise<boolean>, timeout: number, interval = 50): Promise<boolean> {
   const end = Date.now() + timeout;
   do {
-    try { if (await check()) return true; } catch { /* retry */ }
+    try { if (await check()) return true; } catch (e) { if (e instanceof AmbiguousTargetError) throw e; /* otherwise retry */ }
     await sleep(interval);
   } while (Date.now() < end);
   return false;
@@ -37,20 +38,36 @@ function need(s: Step, field: 'target' | 'value') {
   return s[field]!;
 }
 
+/** How a step is shown to the model and in reports. Built from the template, so values bound from env never echo back. */
+export function labelOf(L: Step): string {
+  return `${L.do}${L.target ? ' ' + q(L.target) : ''}${L.value !== undefined && L.do !== 'fill' && L.do !== 'type' ? ' ' + q(L.value) : L.value !== undefined ? ' ' + q(maskish(L)) : ''}`;
+}
+
 export async function runStep(session: Session, s: Step, tmpl?: Step): Promise<StepResult> {
   // V(): how a value appears in exported code. Templated values ({{x}}) become env lookups, never literals.
   const V = (bound: string) => (tmpl?.value && /\{\{\w+\}\}/.test(tmpl.value) ? envLiteral(tmpl.value) : q(bound));
   const page = session.page!;
   const t0 = Date.now();
   const timeout = s.timeout ?? DEFAULT_TIMEOUT;
-  const L = tmpl ?? s; // label uses the template so secrets bound from env never echo back to the model
-  const label = `${L.do}${L.target ? ' ' + q(L.target) : ''}${L.value !== undefined && L.do !== 'fill' && L.do !== 'type' ? ' ' + q(L.value) : L.value !== undefined ? ' ' + q(maskish(L)) : ''}`;
+  const label = labelOf(tmpl ?? s);
   let recorded: RecordedStep | undefined = { ...s };
   try {
     switch (s.do) {
       case 'goto': {
         const url = need(s, 'value');
-        await page.goto(url, { waitUntil: 'domcontentloaded', timeout: Math.max(timeout, 15000) });
+        const allowed = session.cfg?.browser.allowedOrigins ?? [];
+        if (allowed.length) {
+          let o = ''; try { o = new URL(url).origin; } catch { /* reported by goto */ }
+          if (o && !allowed.includes(o)) throw new Error(`origin ${o} is not in browser.allowedOrigins (${allowed.join(', ')})`);
+        }
+        if (session.cfg?.browser.legacyTls && /^https:/i.test(url)) warnLegacyTls();
+        session.obs?.noteFirstParty(url); // what the agent explicitly opens is first party
+        try { await page.goto(url, { waitUntil: 'domcontentloaded', timeout: Math.max(timeout, 15000) }); }
+        catch (e: any) {
+          if (/ERR_CERT|SSL/i.test(String(e?.message))) throw new Error(`${String(e.message).split('\n')[0]} — to accept invalid certificates set browser.ignoreHTTPSErrors: true in .fastqa/config.json`);
+          throw e;
+        }
+        session.obs?.noteFirstParty(page.url()); // and where that navigation ended up (e.g. http -> https)
         recorded.code = `await page.goto(${q(url)});`;
         break;
       }
@@ -67,6 +84,11 @@ export async function runStep(session: Session, s: Step, tmpl?: Step): Promise<S
       case 'fill': case 'type': case 'select': {
         const value = s.value ?? '';
         const r = await session.resolve(need(s, 'target'), 'fill', timeout, s.frame);
+        // A placeholder value typed into a password-like field is a secret: hide it wherever it shows up later.
+        const used = boundVars.get(s);
+        if (used?.length && s.do !== 'select' && (/pass|pwd|secret|token/i.test(s.target || '') || await r.loc.evaluate((el) => (el as HTMLInputElement).type === 'password').catch(() => false))) {
+          for (const [k, v] of used) redactor.addSecret(v, k);
+        }
         if (s.do === 'fill') await r.loc.fill(value, { timeout });
         if (s.do === 'type') { await r.loc.click({ timeout }); await r.loc.pressSequentially(value, { delay: 10 }); }
         if (s.do === 'select') {
@@ -167,7 +189,10 @@ export async function runStep(session: Session, s: Step, tmpl?: Step): Promise<S
           catch { return true; }
         }, timeout);
         if (!ok) throw new Error('element is still visible');
-        recorded.code = `// expect hidden: ${target}`;
+        // Only a raw selector can be exported faithfully: a semantic target is resolved by several strategies at run time.
+        recorded.code = /^(css=|#|\[|\.|testid=)/.test(target) && !s.frame
+          ? (/^testid=/.test(target) ? `await expect(page.getByTestId(${q(target.slice(7))})).toBeHidden();` : `await expect(page.locator(${q(target.replace(/^css=/, ''))})).toBeHidden();`)
+          : `// fastqa:unsupported expect_hidden ${q(target)} (semantic target; enforced by fastqa replay only)`;
         break;
       }
       case 'expect_count': {
@@ -193,11 +218,15 @@ export async function runStep(session: Session, s: Step, tmpl?: Step): Promise<S
         let seen: string[] = [];
         const ok = await poll(async () => {
           const hits = session.since(session.mark).filter((e) => e.kind === 'http' && (!method || e.method === method) && matches(e.url!, urlPart));
-          seen = hits.map((h) => `${h.status || 'FAILED'} ${h.method} ${h.url}`);
-          return hits.some((h) => okStatus(h.status!));
+          seen = hits.map((h) => h.text);
+          const ok = hits.filter((h) => okStatus(h.status!));
+          // An assertion that passes on 4xx/5xx responses declares them expected (a negative test): every response of this
+          // batch that satisfies it, so two negative submits followed by two assertions are both covered.
+          for (const h of ok) if (h.status! >= 400 && h.rid) session.obs?.quality.markExpected(h.rid, `explicit expect_request ${spec} ${want}`);
+          return ok.length > 0;
         }, timeout);
         if (!ok) throw new Error(seen.length ? `request seen but status not ${want}: ${seen.slice(-3).join(' ; ')}` : `no ${method ?? ''} request matching ${q(urlPart)} since this run started`);
-        recorded.code = `// expect_request ${spec} ${want} — checked by fastqa (wrap the triggering action in page.waitForResponse for a native assertion)`;
+        recorded.code = `await fq.expectRequest(${q(spec)}, ${q(want)});`;
         break;
       }
       case 'expect_no_errors': {
@@ -205,9 +234,9 @@ export async function runStep(session: Session, s: Step, tmpl?: Step): Promise<S
         const strict = /strict/i.test(s.value || '');
         const ignore = s.target ? s.target : undefined;
         const bad = session.since(session.mark).filter((e) =>
-          (e.kind !== 'http' || e.status === 0 || e.status! >= (strict ? 400 : 500)) && !(ignore && matches(e.text, ignore)));
+          (e.kind !== 'http' || e.status === 0 || e.status! >= (strict ? 400 : 500)) && !(ignore && (matches(e.text, ignore) || (!!e.url && matches(e.url, ignore)))));
         if (bad.length) throw new Error(`${bad.length} error(s): ` + bad.slice(0, 4).map((e) => `${e.kind}: ${e.text.slice(0, 120)}`).join(' ; '));
-        recorded.code = `// expect_no_errors${strict ? ' strict' : ''} — checked by fastqa`;
+        recorded.code = `await fq.expectNoErrors(${q(strict ? 'strict' : '')}${ignore ? ', ' + q(ignore) : ''});`;
         break;
       }
       case 'expect_accessible': {
@@ -216,7 +245,7 @@ export async function runStep(session: Session, s: Step, tmpl?: Step): Promise<S
         const lim = levels.indexOf((s.value || 'serious').toLowerCase());
         const issues = (await auditA11y(page, () => 'iframe')).filter((i) => levels.indexOf(i.impact) <= (lim < 0 ? 1 : lim));
         if (issues.length) throw new Error(`${issues.length} accessibility rule(s) violated: ` + issues.slice(0, 4).map((i) => `[${i.impact}] ${i.id} ×${i.count}`).join(', ') + ' — call audit for details');
-        recorded.code = `// expect_accessible ${s.value || 'serious'} — checked by fastqa (axe-core)`;
+        recorded.code = `await fq.expectAccessible(${q((s.value || 'serious').toLowerCase())});`;
         break;
       }
       default:
@@ -240,8 +269,20 @@ const isRe = (v: string) => { const m = /^\/(.+)\/([dgimsuy]*)$/.exec(v); if (!m
 function escapeRe(s: string) { return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
 function regexOrString(v: string) { return isRe(v) ? v : q(v); }
 
-/** Replace {{var}} placeholders. */
+/** placeholder name/value pairs that were substituted into a bound step (never serialized) */
+export const boundVars = new WeakMap<Step, Array<[string, string]>>();
+
+/** Replace {{var}} placeholders. Values of secret-looking variables are registered with the redactor. */
 export function bind(step: Step, vars: Record<string, string>): Step {
-  const sub = (x?: string) => x?.replace(/\{\{(\w+)\}\}/g, (_, k) => (k in vars ? vars[k] : process.env[`FASTQA_VAR_${k}`] ?? `{{${k}}}`));
-  return { ...step, target: sub(step.target), value: sub(step.value) };
+  const used: Array<[string, string]> = [];
+  const sub = (x?: string) => x?.replace(/\{\{(\w+)\}\}/g, (_, k) => {
+    const v = k in vars ? vars[k] : process.env[`FASTQA_VAR_${k}`];
+    if (v === undefined) return `{{${k}}}`;
+    used.push([k, v]);
+    if (redactor.isSecretVar(k)) redactor.addSecret(v, k);
+    return v;
+  });
+  const bound = { ...step, target: sub(step.target), value: sub(step.value) };
+  if (used.length) boundVars.set(bound, used);
+  return bound;
 }

@@ -1,5 +1,9 @@
 import { chromium, devices, type Browser, type BrowserContext, type Page, type Locator, type Frame, type FrameLocator } from 'playwright';
 import { snapshotInPage, domSettleInPage, deepTextInPage, iframeInfoInPage, type SnapItem } from './snapshot.js';
+import { loadConfig, type Config, type Mode } from './config.js';
+import { Observer } from './observation/observer.js';
+import { redactor } from './privacy/redact.js';
+import { FLOW_DIR } from './dirs.js';
 
 export type Intent = 'click' | 'fill' | 'any';
 
@@ -24,7 +28,12 @@ export interface LogEvent {
   method?: string;
   url?: string;
   status?: number; // 0 = network failure
+  /** request id in the observation layer */
+  rid?: string;
 }
+
+/** Thrown in strict locator mode when a target matches more than one element. */
+export class AmbiguousTargetError extends Error {}
 
 export interface Evidence {
   console: string[];
@@ -33,7 +42,17 @@ export interface Evidence {
 }
 
 const env = process.env;
+let warnedTls = false;
+/** Told once per process, and only when an HTTPS site is actually opened with the 0.3 default still in effect. */
+export function warnLegacyTls() {
+  if (warnedTls) return;
+  warnedTls = true;
+  console.error('fastqa: invalid HTTPS certificates are accepted (0.3 default). Add .fastqa/config.json to be secure by default, or set FASTQA_IGNORE_HTTPS_ERRORS.');
+}
 export const DEFAULT_TIMEOUT = Number(env.FASTQA_TIMEOUT_MS || 5000);
+
+/** Services that attach to every new session (artifacts, discovery, contracts) register here; keeps this module free of them. */
+export const sessionHooks = { created: [] as Array<(s: Session) => void> };
 
 export class Session {
   browser?: Browser;
@@ -41,7 +60,9 @@ export class Session {
   page?: Page;
   /** last snapshot lines (for diffs) and ref -> selector hints (for stale refs + recording) */
   lastLines: string[] = [];
-  hints = new Map<string, { hint: string; code?: string; frame?: string[] }>();
+  hints = new Map<string, { hint: string; code?: string; frame?: string[]; gen?: number }>();
+  /** strict locators for the running batch (act strict:true); falls back to locator.strict from the config */
+  strictNow?: boolean;
   tape: RecordedStep[] = [];
   evidence: Evidence = { console: [], pageErrors: [], failedRequests: [] };
   inflight = 0;
@@ -51,6 +72,18 @@ export class Session {
   /** start of the current act batch / flow run; expect_request and expect_no_errors look from here */
   mark = 0;
   device?: string;
+  /** observation scope of the current browser context; kept after close so evidence stays readable */
+  obs!: Observer;
+  cfg!: Config;
+  /** explicit run option (CLI --mode, flow run mode); overrides the config file */
+  mode?: Mode;
+  /** per-run options that services read (CLI --bundle, --baseline) */
+  options: { bundle?: boolean; baseline?: 'record' | 'check' } = {};
+  /** called when a session ends (context closed), before the observer is replaced */
+  onEnd?: (obs: Observer) => Promise<void> | void;
+  /** counts main-frame navigations: a ref issued on an older document is stale */
+  docGen = 0;
+  private detachers: Array<() => void> = [];
 
   private addLog(e: Omit<LogEvent, 't'>) {
     this.log.push({ t: Date.now(), ...e });
@@ -62,53 +95,121 @@ export class Session {
   async ensure(fresh = false, device?: string): Promise<Page> {
     if (device !== undefined && device !== (this.device ?? '')) { fresh = true; this.device = device || undefined; }
     if (fresh) await this.closeContext();
+    if (!this.context) {
+      // Validate configuration before any browser work: an invalid policy is an error, never a silent fallback.
+      this.cfg = loadConfig(FLOW_DIR(), this.mode);
+      redactor.configure(this.cfg.privacy);
+      for (const [k, v] of Object.entries(env)) if (k.startsWith('FASTQA_VAR_') && v && redactor.isSecretVar(k.slice(11))) redactor.addSecret(v, k.slice(11));
+      for (const w of this.cfg.warnings) console.error(`fastqa: config: ${w}`);
+    }
     if (!this.browser) this.browser = await launch();
     if (!this.context) {
       const [w, h] = (env.FASTQA_VIEWPORT || '1280x800').split('x').map(Number);
+      const tls = { ignoreHTTPSErrors: this.cfg.browser.ignoreHTTPSErrors };
       this.context = this.browser.contexts()[0] && env.FASTQA_CDP_URL
         ? this.browser.contexts()[0]
-        : await this.browser.newContext(this.device
-          ? { ...deviceProfile(this.device), ignoreHTTPSErrors: true }
-          : { viewport: { width: w, height: h }, ignoreHTTPSErrors: true });
+        : await this.browser.newContext(this.device ? { ...deviceProfile(this.device), ...tls } : { viewport: { width: w, height: h }, ...tls });
       this.context.setDefaultTimeout(DEFAULT_TIMEOUT);
+      this.obs = new Observer(this.cfg, redactor);
+      this.obs.environment.browser = `chromium ${this.browser.version()}`;
+      if (this.device) this.obs.environment.device = this.device;
+      for (const h of sessionHooks.created) h(this);
+      this.attachContext(this.context);
     }
     if (!this.page || this.page.isClosed()) {
       this.page = this.context.pages()[0] ?? (await this.context.newPage());
-      this.attach(this.page);
-      this.context.on('page', (p) => { this.page = p; this.attach(p); });
+      this.attachPage(this.page);
     }
     return this.page;
   }
 
-  private attach(page: Page) {
-    page.on('console', (m) => {
+  /**
+   * Listeners are bound once per context, at context level, so the first request of a new page or popup is never missed
+   * and nothing is registered twice. Each handler feeds the 0.3 buffers (explicit assertions, legacy evidence) and the observer.
+   */
+  private attachContext(ctx: BrowserContext) {
+    const on = (ev: string, fn: (...a: any[]) => void) => { (ctx as any).on(ev, fn); this.detachers.push(() => (ctx as any).off(ev, fn)); };
+    const cdp = !!env.FASTQA_CDP_URL;
+    const pageOf = (r: { frame(): Frame }): Page | undefined => { try { return r.frame().page(); } catch { return this.page; } };
+    // Context-level events also carry traffic that page-level listeners (0.3) never saw: requests made by a service
+    // worker, and pages fastqa does not drive (other tabs of a browser attached over CDP). Both are ignored.
+    const foreign = (r: import('playwright').Request): boolean => {
+      try { if (r.serviceWorker()) return true; } catch { /* not a worker request */ }
+      // In a context fastqa created, every page is one it drives (popups included, even before their 'page' event).
+      // Only an attached browser (CDP) has tabs that belong to someone else.
+      if (!cdp) return false;
+      const p = pageOf(r);
+      return !!p && !this.attachedPages.has(p);
+    };
+    const stranger = (p: Page | null | undefined) => cdp && !!p && !this.attachedPages.has(p);
+    on('page', (p: Page) => { this.page = p; this.attachPage(p); this.obs.onPage(p, 'page_opened'); });
+    on('console', (m: import('playwright').ConsoleMessage) => {
       if (/favicon/.test(m.location()?.url || '')) return;
-      if (m.type() === 'error' || m.type() === 'warning') push(this.evidence.console, `[${m.type()}] ${m.text()}`);
-      if (m.type() === 'error' && !/Failed to load resource/.test(m.text())) this.addLog({ kind: 'console', text: m.text() });
+      if (stranger(m.page())) return;
+      const text = redactor.text(m.text().slice(0, 2000));
+      if (m.type() === 'error' || m.type() === 'warning') push(this.evidence.console, `[${m.type()}] ${text}`);
+      if (m.type() === 'error' && !/Failed to load resource/.test(text)) this.addLog({ kind: 'console', text });
+      const p = m.page() ?? this.page; if (p) this.obs.onConsole(p, m);
     });
-    page.on('pageerror', (e) => {
-      push(this.evidence.pageErrors, String(e?.message || e));
-      this.addLog({ kind: 'pageerror', text: String(e?.message || e) });
+    on('weberror', (w: import('playwright').WebError) => {
+      if (stranger(w.page())) return;
+      const e = w.error(); const msg = redactor.text(String(e?.message || e).slice(0, 2000));
+      push(this.evidence.pageErrors, msg);
+      this.addLog({ kind: 'pageerror', text: msg });
+      const p = w.page() ?? this.page; if (p) this.obs.onPageError(p, e);
     });
     // A request counts as in flight until its response headers arrive (bodies the app never reads must not block settle).
-    page.on('request', (r) => { this.pending.add(r); this.inflight = this.pending.size; });
-    page.on('response', (res) => {
-      const r = res.request();
-      this.pending.delete(r); this.inflight = this.pending.size;
-      if (['fetch', 'xhr', 'document'].includes(r.resourceType()))
-        this.addLog({ kind: 'http', method: r.method(), url: r.url(), status: res.status(), text: `${res.status()} ${r.method()} ${r.url()}` });
-      if (res.status() >= 400 && !/favicon/.test(r.url())) push(this.evidence.failedRequests, `${res.status()} ${r.method()} ${r.url()}`);
+    on('request', (r: import('playwright').Request) => {
+      if (foreign(r)) return;
+      this.pending.add(r); this.inflight = this.pending.size;
+      const p = pageOf(r); if (p) this.obs.onRequest(p, r);
     });
-    page.on('requestfinished', (r) => { this.pending.delete(r); this.inflight = this.pending.size; });
-    page.on('requestfailed', (r) => {
+    on('response', (res: import('playwright').Response) => {
+      const r = res.request();
+      if (foreign(r)) return;
       this.pending.delete(r); this.inflight = this.pending.size;
-      if (/ERR_ABORTED/.test(r.failure()?.errorText ?? '')) return; // navigation noise
-      this.addLog({ kind: 'http', method: r.method(), url: r.url(), status: 0, text: `FAILED ${r.method()} ${r.url()}` });
-      push(this.evidence.failedRequests, `FAILED ${r.method()} ${r.url()} ${r.failure()?.errorText ?? ''}`);
+      const p = pageOf(r); const rec = p ? this.obs.onResponse(p, res) : undefined;
+      const url = rec?.url ?? redactor.networkUrl(r.url());
+      if (['fetch', 'xhr', 'document'].includes(r.resourceType()))
+        this.addLog({ kind: 'http', method: r.method(), url: r.url(), status: res.status(), text: `${res.status()} ${r.method()} ${url}`, rid: rec?.id });
+      if (res.status() >= 400 && !/favicon/.test(r.url())) push(this.evidence.failedRequests, `${res.status()} ${r.method()} ${url}`);
+    });
+    on('requestfinished', (r: import('playwright').Request) => { if (foreign(r)) return; this.pending.delete(r); this.inflight = this.pending.size; this.obs.onFinished(r); });
+    on('requestfailed', (r: import('playwright').Request) => {
+      if (foreign(r)) return;
+      this.pending.delete(r); this.inflight = this.pending.size;
+      const p = pageOf(r); const rec = p ? this.obs.onFailed(p, r) : undefined;
+      if (/ERR_ABORTED/.test(r.failure()?.errorText ?? '')) return; // aborts are recorded by the observer, not reported as failures
+      const url = rec?.url ?? redactor.networkUrl(r.url());
+      this.addLog({ kind: 'http', method: r.method(), url: r.url(), status: 0, text: `FAILED ${r.method()} ${url}`, rid: rec?.id });
+      push(this.evidence.failedRequests, `FAILED ${r.method()} ${url} ${r.failure()?.errorText ?? ''}`);
     });
   }
 
+  private attachedPages = new WeakSet<Page>();
+  private attachPage(page: Page) {
+    if (this.attachedPages.has(page)) return;
+    this.attachedPages.add(page);
+    const nav = (f: Frame) => { if (f === page.mainFrame()) this.docGen++; this.obs.onNavigated(page, f); };
+    const closed = () => {
+      this.obs.onPage(page, 'page_closed');
+      // its open requests will never finish: stop waiting for them
+      for (const r of [...this.pending] as import('playwright').Request[]) { try { if (r.frame().page() === page) this.pending.delete(r); } catch { /* no frame: leave it */ } }
+      this.inflight = this.pending.size;
+      // a popup that closes hands control back to the page that is still open
+      if (this.page === page) { const open = this.context?.pages().filter((p) => !p.isClosed()) ?? []; if (open.length) this.page = open[open.length - 1]; }
+    };
+    page.on('framenavigated', nav); page.on('close', closed);
+    this.detachers.push(() => { page.off('framenavigated', nav); page.off('close', closed); });
+  }
+
   async closeContext() {
+    for (const d of this.detachers.splice(0)) try { d(); } catch { /* context already gone */ }
+    this.attachedPages = new WeakSet(); // a context that stays open (CDP) must get its page listeners again next time
+    if (this.obs && !this.obs.disposed) {
+      this.obs.dispose();
+      try { await this.onEnd?.(this.obs); } catch (e) { console.error(`fastqa: could not finalize session ${this.obs.sessionId}: ${String(e).split('\n')[0]}`); }
+    }
     if (this.context && !env.FASTQA_CDP_URL) await this.context.close().catch(() => {});
     this.context = undefined; this.page = undefined; this.inflight = 0; this.pending.clear();
     this.lastLines = []; this.hints.clear();
@@ -155,7 +256,7 @@ export class Session {
         } catch { /* frame navigated or detached mid-snapshot */ }
       }
     }
-    for (const it of items) if (it.ref && it.hint) this.hints.set(it.ref, { hint: it.hint, code: it.code, frame: it.frame });
+    for (const it of items) if (it.ref && it.hint) this.hints.set(it.ref, { hint: it.hint, code: it.code, frame: it.frame, gen: this.docGen });
     return { items, truncated, url: res.url, title: res.title };
   }
 
@@ -213,7 +314,7 @@ export class Session {
   /** Compact text: header + lines */
   static render(res: { items: SnapItem[]; truncated: boolean; url: string; title: string; maxRef?: number }) {
     const lines = res.items.map((i) => i.line);
-    return `url: ${res.url}\ntitle: ${res.title}\n` + lines.join('\n') + (res.truncated ? '\n… (truncated; use snapshot with root=<css> to scope)' : '');
+    return `url: ${redactor.pageUrl(res.url)}\ntitle: ${res.title}\n` + lines.join('\n') + (res.truncated ? '\n… (truncated; use snapshot with root=<css> to scope)' : '');
   }
 
   /** Diff vs previous snapshot keyed by line content. */
@@ -247,6 +348,7 @@ export class Session {
   async resolve(target: string, intent: Intent, timeout = DEFAULT_TIMEOUT, frame?: string | string[]):
     Promise<{ loc: Locator; record: string; code: string; frame?: string[] }> {
     const t = target.trim();
+    const strict = this.strictNow ?? this.cfg?.strictLocators ?? false;
     const fr = (c?: string[]) => (c && c.length ? c : undefined);
     if (/^e\d+$/.test(t)) {
       const h = this.hints.get(t);
@@ -257,6 +359,12 @@ export class Session {
         return { loc: byRef.first(), record: h?.hint ?? `[data-fq="${t}"]`, code: (h?.code ?? `page.locator('[data-fq="${t}"]')`).replace(/^page/, pre), frame: fr(h?.frame) };
       }
       if (!h) throw new Error(`Unknown ref ${t}. Take a snapshot first.`);
+      if (strict) {
+        // The stamped element is gone. Falling back to its recorded selector is only safe when that is still unambiguous.
+        if (h.gen !== undefined && h.gen !== this.docGen) throw new Error(`Stale ref ${t}: the page navigated after it was issued. Take a snapshot and use a current ref.`);
+        const n = await sc.locator(h.hint).count().catch(() => 0);
+        if (n !== 1) throw new Error(`Stale ref ${t}: its element is gone and the recorded selector now matches ${n} elements. Take a snapshot and use a current ref.`);
+      }
       return { loc: sc.locator(h.hint).first(), record: h.hint, code: (h.code ?? `page.locator(${JSON.stringify(h.hint)})`).replace(/^page/, pre), frame: fr(h.frame) };
     }
     const deadline = Date.now() + timeout;
@@ -269,7 +377,10 @@ export class Session {
         const pre = Session.codePrefix(chain);
         for (const [loc, code] of this.candidates(sc, t, intent).filter((c) => /exact: true|getByTestId|page\.locator/.test(c[1]) === exactPass)) {
           const v = loc.filter({ visible: true });
-          if ((await v.count().catch(() => 0)) > 0) {
+          const n = await v.count().catch(() => 0);
+          if (n > 0) {
+            // Strict mode never picks one of several matches: it reports the candidates and lets the caller choose a ref.
+            if (n > 1 && strict) throw new AmbiguousTargetError(await this.describeAmbiguous(v, n, t, chain));
             const raw = !/^(testid=|css=|xpath=|role=|text=|#|\[|\.|\/\/)/.test(t) ? `${code}.first()` : code;
             return { loc: v.first(), record: t, code: raw.replace(/^page/, pre), frame: fr(chain) };
           }
@@ -279,6 +390,40 @@ export class Session {
       if (++polls % 5 === 0 && !Array.isArray(frame)) scopes = await this.scopesFor(frame); // frames may appear late
     } while (Date.now() < deadline);
     throw new Error(`No visible element matches "${t}"${frame ? ` in frame "${frame}"` : ''} (tried ${intent === 'fill' ? 'label, placeholder, textbox' : 'role+name, label, text'} in page, shadow DOM and iframes)`);
+  }
+
+  /** Stamps refs on the first matches and describes them compactly, so the caller can retry with an exact ref. */
+  private async describeAmbiguous(v: Locator, n: number, t: string, chain: string[]): Promise<string> {
+    let items: Array<{ ref: string; role: string; text: string; near: string; hint: string }> = [];
+    try {
+      items = await v.evaluateAll((els, base) => {
+        const w = window as any; w.__fq = w.__fq || { n: 0 }; w.__fq.n = Math.max(w.__fq.n, base);
+        const clean = (s: string | null | undefined, max: number) => (s || '').replace(/\s+/g, ' ').trim().slice(0, max);
+        const cssPath = (el: Element) => {
+          const path: string[] = []; let cur: Element | null = el;
+          while (cur && cur.nodeType === 1 && path.length < 8) {
+            if (cur.id) { path.unshift('#' + CSS.escape(cur.id)); break; }
+            const tag = cur.tagName.toLowerCase(); const p: Element | null = cur.parentElement; const self: Element = cur;
+            const sib = p ? Array.from(p.children).filter((c) => c.tagName === self.tagName) : [self];
+            path.unshift(sib.length > 1 ? `${tag}:nth-of-type(${sib.indexOf(self) + 1})` : tag);
+            cur = p;
+          }
+          return path.join(' > ');
+        };
+        return els.slice(0, 5).map((el) => {
+          let ref = el.getAttribute('data-fq');
+          if (!ref) { ref = 'e' + (++w.__fq.n); el.setAttribute('data-fq', ref); }
+          const box = el.closest('li,tr,section,article,form,fieldset,[role=row],[role=listitem],.card') as HTMLElement | null;
+          return { ref, role: el.getAttribute('role') || el.tagName.toLowerCase(), text: clean((el as HTMLElement).innerText || el.getAttribute('aria-label') || (el as HTMLInputElement).value, 40), near: clean(box?.innerText, 60), hint: cssPath(el) };
+        });
+      }, this.refBase);
+    } catch { /* the page changed while describing: report the count only */ }
+    for (const it of items) {
+      this.refBase = Math.max(this.refBase, Number(it.ref.slice(1)) || 0);
+      this.hints.set(it.ref, { hint: it.hint, code: `page.locator(${JSON.stringify(it.hint)})`, frame: chain.length ? chain : undefined, gen: this.docGen });
+    }
+    const list = items.map((i) => `${i.ref} ${i.role} ${JSON.stringify(i.text)}${i.near && i.near !== i.text ? ` in ${JSON.stringify(i.near)}` : ''}`).join(' | ');
+    return `"${t}" matches ${n} elements and strict mode will not pick one. Use a ref: ${list}${n > items.length ? ` | … ${n - items.length} more` : ''}`;
   }
 
   private candidates(sc: Page | FrameLocator, t: string, intent: Intent): Array<[Locator, string]> {
@@ -307,6 +452,12 @@ export class Session {
       c.push([sc.getByText(t), `page.getByText(${s})`]);
     }
     return c;
+  }
+
+  /** Elements hidden in every screenshot: password fields plus privacy.maskSelectors. A screenshot can still show other secrets. */
+  maskLocators(): Locator[] {
+    if (!this.page) return [];
+    return ['input[type=password]', ...(this.cfg?.privacy.maskSelectors ?? [])].map((s) => this.page!.locator(s));
   }
 
   takeEvidence(): Evidence {
