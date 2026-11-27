@@ -10,6 +10,7 @@
 [![npm downloads](https://img.shields.io/npm/dm/fastqa-mcp?logo=npm&cacheSeconds=3600)](https://www.npmjs.com/package/fastqa-mcp)
 [![QA friendly](.github/badges/qa-friendly.svg)](#what-fastqa-can-test)
 [![license: MIT](https://img.shields.io/npm/l/fastqa-mcp.svg)](LICENSE)
+[![VnKk8/FastQA-MCP MCP server](https://glama.ai/mcp/servers/VnKk8/FastQA-MCP/badges/score.svg)](https://glama.ai/mcp/servers/VnKk8/FastQA-MCP)
 
 [Quick start](#quick-start) · [Not Playwright MCP](#not-playwright-mcp-and-not-the-playwright-command-line) · [How it works](#how-it-works) · [Continuous QA](#continuous-qa) · [Benchmarks](#speed-by-design) · [CI](#from-ai-exploration-to-deterministic-ci) · [Reference](docs/REFERENCE.md)
 
