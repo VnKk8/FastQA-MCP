@@ -4,7 +4,7 @@ import { readdirSync, readFileSync, mkdirSync, writeFileSync, mkdtempSync, exist
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { start } from './demo-server.mjs';
-import { connect, suite, cli } from './lib.mjs';
+import { connect, rawServer, suite, cli } from './lib.mjs';
 
 const srv = await start();
 const base = `http://127.0.0.1:${srv.address().port}`;
@@ -60,11 +60,43 @@ const place = [{ do: 'click', target: 'Place order' }, { do: 'expect_text', valu
   ]);
   has('concurrent calls are queued: the first batch sees only its own value', a, /^PASSED 3\/3/);
   has('concurrent calls are queued: the second batch runs after it', b, /^PASSED 3\/3/);
-  has('concurrent calls are queued: the snapshot sees one consistent final value', snap, /textbox "Quantity" ="(3|7)"/);
+  has('concurrent calls are queued: the snapshot, sent last, sees the value of the second batch', snap, 'textbox "Quantity" ="7"');
   let out = await call('evidence', { view: 'timeline', limit: 100 });
   const order = [...out.matchAll(/(A-\d+) (fill|wait|expect_value)/g)].map((m) => m[2]).join(',');
   check('concurrent calls are queued: actions of the two batches never interleave (whichever ran first)', order.endsWith('fill,wait,expect_value,fill,wait,expect_value'), order);
   await s.close();
+}
+
+// ---------------------------------------------------------------- 2b. requests that arrive in one read run in arrival order
+// The SDK validates arguments asynchronously, so a call with a small schema used to overtake calls read before it.
+// Seen on a CI runner: the snapshot ran before both batches. One write makes that deterministic.
+{
+  const r = await rawServer({ prefix: 'fq-safe-2b-' });
+  let p = r.answer(1); r.write(r.tool(1, 'open', { url: `${base}/orders?notify=off`, fresh: true })); await p;
+  const all = Promise.all([11, 12, 13, 14].map(r.answer));
+  r.write(
+    r.tool(11, 'act', { steps: [{ do: 'fill', target: 'Quantity', value: '3' }, { do: 'wait', value: '300' }, { do: 'expect_value', target: 'Quantity', value: '3' }] }) +
+    r.tool(12, 'act', { steps: [{ do: 'fill', target: 'Quantity', value: '7' }, { do: 'wait', value: '100' }, { do: 'expect_value', target: 'Quantity', value: '7' }] }) +
+    r.tool(13, 'snapshot') +
+    r.tool(14, 'act', { steps: [{ do: 'expect_value', target: 'Quantity', value: '7' }] }),
+  );
+  const [a, b, snap, c] = (await all).map(r.textOf);
+  check('one read, four calls: answered in arrival order', r.order.filter((id) => typeof id === 'number' && id > 10).join(',') === '11,12,13,14', r.order.join(','));
+  has('one read, four calls: each batch passes with its own value', `${a}\n---\n${b}\n---\n${c}`, /^PASSED 3\/3/, /\n---\nPASSED 3\/3/, /\n---\nPASSED 1\/1/);
+  has('one read, four calls: the snapshot sent third sees the value of the second batch', snap, 'textbox "Quantity" ="7"');
+  // a call cancelled while it waits never runs; one cancelled while it runs gives up its turn, and nothing interleaves
+  const rest = Promise.all([21, 23].map(r.answer));
+  r.write(
+    r.tool(21, 'act', { steps: [{ do: 'fill', target: 'Quantity', value: '21' }, { do: 'wait', value: '300' }, { do: 'expect_value', target: 'Quantity', value: '21' }] }) +
+    r.tool(22, 'act', { steps: [{ do: 'fill', target: 'Quantity', value: '22' }] }) +
+    r.notify('notifications/cancelled', { requestId: 22, reason: 'test' }) +
+    r.tool(23, 'snapshot'),
+  );
+  const [first, last] = (await rest).map(r.textOf);
+  has('a call cancelled while waiting: the call before it completes', first, /^PASSED 3\/3/);
+  has('a call cancelled while waiting never runs: the next call sees the value before it', last, 'textbox "Quantity" ="21"');
+  check('a call cancelled while waiting gets no answer', !r.order.includes(22), r.order.join(','));
+  await r.close();
 }
 
 // ---------------------------------------------------------------- 3. independent workers share nothing

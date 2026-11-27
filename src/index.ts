@@ -3,6 +3,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
 import { Session } from './session.js';
+import { inArrivalOrder } from './ordering.js';
 import { STEP_KINDS } from './runner.js';
 import { runBatch, qualityOf, structured, type BatchResult, type QualityResult } from './exec.js';
 import { saveFlow, loadFlow, listFlows, runSuite, exportFlow, recentRuns, FLOW_DIR, type FlowRun } from './flows.js';
@@ -39,6 +40,7 @@ function evidenceSummary(): string {
 const qaTail = (q?: QualityResult) => (q?.text ? `\n${q.text}` : '');
 
 // One browser context, one caller at a time: concurrent tool calls are queued, never interleaved.
+// `inArrivalOrder` (below, on the transport) makes the queue order the arrival order.
 let chain: Promise<unknown> = Promise.resolve();
 function exclusive<A>(fn: (a: A) => Promise<Result>): (a: A) => Promise<Result> {
   return (a: A) => {
@@ -354,6 +356,7 @@ if (argv[0] === 'run') {
 } else {
   const transport = new StdioServerTransport();
   await server.connect(transport);
+  inArrivalOrder(transport);
   const shutdown = async () => { await session.close(); process.exit(0); };
   process.on('SIGINT', shutdown);
   process.on('SIGTERM', shutdown);

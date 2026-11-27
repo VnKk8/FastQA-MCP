@@ -335,3 +335,34 @@ test('CI annotations: each failed check becomes one error, with its detail, and 
   const quoted = failures(['=== OK   flow run with a wrong password', '0/1 flows passed', 'FAIL add-to-cart (5709ms)', '    5. ✗ expect_url "/account"', '', 'ALL CHECKS PASSED', 'FAIL a real check', '     why'].join('\n'));
   assert.deepEqual(quoted.blocks, ['FAIL a real check\n     why'], 'a failing flow quoted inside a passing check is not a failure');
 });
+
+// ------------------------------------------------------------------ arrival order of tool calls
+test('tool calls are handed to the server one at a time, in arrival order', async () => {
+  const { inArrivalOrder } = await import('../dist/ordering.js');
+  const delivered = []; const sent = [];
+  const t = { onmessage: (m) => delivered.push(m.id ?? m.method), send: async (m) => { sent.push(m); } };
+  inArrivalOrder(t, 2);
+  const call = (id) => ({ jsonrpc: '2.0', id, method: 'tools/call', params: { name: 'snapshot', arguments: {} } });
+  t.onmessage(call(1)); t.onmessage(call(2)); t.onmessage({ jsonrpc: '2.0', id: 'x', method: 'tools/list' }); t.onmessage(call(3));
+  assert.deepEqual(delivered, [1, 'x'], 'the first call, and everything that is not a tool call, pass at once');
+  t.onmessage(call(4));
+  assert.equal(sent.length, 1, 'a call beyond the waiting limit is refused, not kept');
+  assert.equal(sent[0].id, 4); assert.match(sent[0].error.message, /Too many tool calls are waiting \(limit 2\)/);
+  await t.send({ jsonrpc: '2.0', id: 'x', result: {} });
+  assert.deepEqual(delivered, [1, 'x'], 'the answer to another request does not end the turn');
+  await t.send({ jsonrpc: '2.0', id: 1, result: {} });
+  assert.deepEqual(delivered, [1, 'x', 2], 'the answer to the running call starts the next one');
+  // cancelling a waiting call removes it; cancelling the running one ends its turn, because the SDK sends no answer for it
+  t.onmessage({ jsonrpc: '2.0', method: 'notifications/cancelled', params: { requestId: 3 } });
+  t.onmessage(call(5));
+  t.onmessage({ jsonrpc: '2.0', method: 'notifications/cancelled', params: { requestId: 2 } });
+  assert.deepEqual(delivered, [1, 'x', 2, 'notifications/cancelled', 5], 'call 3 never ran; the cancellation of call 2 reached the server, then call 5 took its turn');
+  // an answer that cannot be written still ends the turn
+  const seen = [];
+  const failing = { onmessage: (m) => seen.push(m.id), send: async () => { throw new Error('closed'); } };
+  inArrivalOrder(failing);
+  failing.onmessage(call(1)); failing.onmessage(call(2));
+  await assert.rejects(failing.send({ jsonrpc: '2.0', id: 1, error: { code: -1, message: 'x' } }), /closed/);
+  assert.deepEqual(seen, [1, 2]);
+  assert.throws(() => inArrivalOrder({ send: async () => {} }), /connect the server/);
+});
