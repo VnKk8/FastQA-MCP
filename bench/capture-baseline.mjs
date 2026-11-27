@@ -13,6 +13,10 @@ import { pathToFileURL } from 'node:url';
 import path from 'node:path';
 import { start } from './demo-server.mjs';
 
+// Paths below the data directory print with the platform's separator. The 0.3.2 baseline was recorded on Windows,
+// so both sides of a comparison are brought to forward slashes.
+export const slashes = (s) => s.replace(/<FASTQA_DIR>[^\s'"]*/g, (m) => m.replace(/\\/g, '/'));
+
 export async function runContractScript() {
   const srv = await start();
   const base = `http://127.0.0.1:${srv.address().port}`;
@@ -20,7 +24,7 @@ export async function runContractScript() {
   const env = { ...process.env, FASTQA_DIR: dir, FASTQA_VAR_password: 'secret123' };
   const c = new Client({ name: 'capture', version: '0' });
   await c.connect(new StdioClientTransport({ command: 'node', args: [path.resolve('dist/index.js')], env }));
-  const norm = (s) => s.split(base).join('{{base}}').split(dir).join('<FASTQA_DIR>').replace(/\d+ms/g, 'Nms').replace(/fail-\d+/g, 'fail-N')
+  const norm = (s) => slashes(s.split(base).join('{{base}}').split(dir).join('<FASTQA_DIR>')).replace(/\d+ms/g, 'Nms').replace(/fail-\d+/g, 'fail-N')
     .replace(/\d{4}-\d\d-\d\dT[\d-]+Z/g, '<stamp>').replace(/legacy-shop-[\w-]+\.jpg/g, 'legacy-shop-N.jpg');
   const log = [];
   const call = async (name, args) => {

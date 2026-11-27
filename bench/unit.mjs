@@ -300,3 +300,36 @@ test('mode off evaluates nothing', () => {
   const e = engine({}, undefined, { mode: 'off' }); e.onResponse(rec({ status: 500 }));
   assert.equal(e.findings.length, 0);
 });
+
+// ------------------------------------------------------------------ test tooling (platform independence, CI output)
+test('baseline comparison ignores the platform path separator below the data directory', async () => {
+  const { slashes } = await import('./capture-baseline.mjs');
+  assert.equal(slashes('Saved 12 steps to <FASTQA_DIR>\\flows\\legacy-shop.json'), 'Saved 12 steps to <FASTQA_DIR>/flows/legacy-shop.json');
+  assert.equal(slashes("open '<FASTQA_DIR>\\flows\\no-such-flow.json'"), "open '<FASTQA_DIR>/flows/no-such-flow.json'");
+  assert.equal(slashes('report: <FASTQA_DIR>/reports/<stamp>.html'), 'report: <FASTQA_DIR>/reports/<stamp>.html', 'already forward slashes: unchanged');
+  assert.equal(slashes('fill "Path" "C:\\temp\\x"'), 'fill "Path" "C:\\temp\\x"', 'other backslashes are content and stay');
+});
+test('CI annotations: each failed check becomes one error, with its detail, and the log tail is kept', async () => {
+  const { failures, commands } = await import('./ci-annotate.mjs');
+  const log = [
+    'ok   first check', 'FAIL second check', '     --- 0.3.2 ---', '     a\\b', '     --- now ---', '     a/b', 'ok   third check',
+    '', '=== FAIL login page (12ms, 40 chars)', 'title: 100% wrong', '', '=== OK   next call',
+    'not ok 4 - a unit test', '  ---', "  error: 'boom'", '  ...', 'ok 5 - another', '', 'compat: 1 of 50 FAILED',
+  ].join('\n');
+  const f = failures(log);
+  assert.equal(f.total, 4);
+  assert.equal(f.blocks[0], 'FAIL second check\n     --- 0.3.2 ---\n     a\\b\n     --- now ---\n     a/b');
+  assert.equal(f.blocks[1], '=== FAIL login page (12ms, 40 chars)\ntitle: 100% wrong');
+  assert.match(f.blocks[2], /^not ok 4 - a unit test\n {2}---\n {2}error: 'boom'/);
+  assert.equal(f.blocks[3], 'compat: 1 of 50 FAILED');
+  const cmds = commands(log);
+  assert.equal(cmds.length, 5, 'four errors and the tail');
+  assert.equal(cmds[0], '::error title=FAIL second check::FAIL second check%0A     --- 0.3.2 ---%0A     a\\b%0A     --- now ---%0A     a/b');
+  assert.ok(cmds[1].startsWith('::error title==== FAIL login page (12ms%2C 40 chars)::') && cmds[1].includes('100%25 wrong'), cmds[1]);
+  assert.ok(cmds[4].startsWith('::notice title=Last lines of the test log::') && cmds[4].endsWith('%0Acompat: 1 of 50 FAILED'), cmds[4]);
+  assert.ok(cmds.every((c) => !c.includes('\n')), 'one line per command');
+  const many = commands(Array.from({ length: 14 }, (_, i) => `FAIL check ${i}`).join('\n'));
+  assert.equal(many.filter((c) => c.startsWith('::error')).length, 9, 'GitHub shows ten errors per step at most');
+  assert.ok(many.some((c) => c.startsWith('::warning title=5 earlier failure(s) not shown')) && many[0].includes('FAIL check 5'));
+  assert.deepEqual(commands('ok   everything\nall 3 checks passed').map((c) => c.split('::')[1]), ['notice title=Last lines of the test log']);
+});

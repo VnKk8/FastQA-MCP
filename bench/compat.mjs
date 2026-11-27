@@ -4,13 +4,13 @@
 import { readFileSync, mkdirSync, copyFileSync, mkdtempSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { runContractScript } from './capture-baseline.mjs';
+import { runContractScript, slashes } from './capture-baseline.mjs';
 import { start } from './demo-server.mjs';
 import { connect, suite, cli } from './lib.mjs';
 
 const { check, has, done } = suite('compat');
 const legacyTools = JSON.parse(readFileSync('bench/fixtures/legacy/tools-0.3.2.json', 'utf8'));
-const baseline = readFileSync('docs/baseline/responses-0.3.2.txt', 'utf8').replace(/\r\n/g, '\n').replace(/legacy-shop-[\w-]+\.jpg/g, 'legacy-shop-N.jpg');
+const baseline = slashes(readFileSync('docs/baseline/responses-0.3.2.txt', 'utf8').replace(/\r\n/g, '\n')).replace(/legacy-shop-[\w-]+\.jpg/g, 'legacy-shop-N.jpg');
 
 // ---- 1. the 0.3.2 script, output compared section by section
 const now = await runContractScript();
