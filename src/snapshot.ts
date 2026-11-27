@@ -16,7 +16,7 @@ export interface SnapItem {
   frame?: string[];  // iframe selector chain from the top page; empty/undefined = main frame
 }
 
-export function snapshotInPage(opts: SnapOptions): { items: SnapItem[]; truncated: boolean; url: string; title: string; maxRef: number } {
+export function snapshotInPage(opts: SnapOptions): { items: SnapItem[]; truncated: boolean; url: string; title: string; maxRef: number; page: { forms: number; fields: number; required: number; botCheck?: string; captcha: boolean } } {
   const w = window as any;
   w.__fq = w.__fq || { n: 0 };
   w.__fq.n = Math.max(w.__fq.n, opts.base || 0); // refs stay unique across navigations
@@ -59,6 +59,7 @@ export function snapshotInPage(opts: SnapOptions): { items: SnapItem[]; truncate
       if (t === 'radio') return 'radio';
       if (t === 'range') return 'slider';
       if (t === 'search') return 'searchbox';
+      if (t === 'file') return 'file'; // not a textbox: it takes files (the upload step), not text
       return 'textbox';
     }
     if (/^h[1-6]$/.test(tag)) return 'heading';
@@ -116,6 +117,13 @@ export function snapshotInPage(opts: SnapOptions): { items: SnapItem[]; truncate
       if (opt) parts.push('=' + q(clip(opt.text, 40)));
       parts.push('options:' + Array.from(s.options).slice(0, 8).map((o) => clip(o.text, 20)).join('|') + (s.options.length > 8 ? '|…' : ''));
     }
+    if (role === 'file') {
+      const names = Array.from(h.files ?? []).map((f) => f.name);
+      if (names.length) parts.push('=' + q(clip(names.join(', '), 40)));
+      if (h.accept) parts.push('accept:' + clip(h.accept, 40));
+      if (h.multiple) parts.push('[multiple]');
+      if (!visible(el)) parts.push('[hidden]');
+    }
     if (role === 'checkbox' || role === 'radio' || role === 'switch') {
       const checked = h.checked ?? el.getAttribute('aria-checked') === 'true';
       if (checked || el.getAttribute('aria-checked') === 'true') parts.push('[checked]');
@@ -125,7 +133,21 @@ export function snapshotInPage(opts: SnapOptions): { items: SnapItem[]; truncate
     if (el.getAttribute('aria-selected') === 'true') parts.push('[selected]');
     if (h.required) parts.push('[required]');
     const inv = el.getAttribute('aria-invalid');
-    if (inv === 'true') parts.push('[invalid]');
+    if (inv === 'true') parts.push('[invalid]'); // the page's aria-invalid, exactly as in 0.3
+    // Additions since 0.3, always after its states: the rules the browser enforces, so boundaries can be tested without
+    // trying, and the browser's own validation message once it applies to the person (after typing or a submit
+    // attempt), so an untouched required field is not called invalid.
+    if (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA') {
+      const t = (h.type || '').toLowerCase();
+      if (['email', 'tel', 'url', 'number', 'date', 'time', 'datetime-local', 'month', 'week'].includes(t)) parts.push('type:' + t);
+      for (const a of ['maxlength', 'minlength', 'min', 'max', 'step']) { const v = el.getAttribute(a); if (v) parts.push(`${a}:${clip(v, 20)}`); }
+      const p = el.getAttribute('pattern');
+      if (p) parts.push('pattern:' + (/\s|"/.test(p) ? q(clip(p, 30)) : clip(p, 30)));
+    }
+    let userInvalid = false;
+    try { userInvalid = el.matches(':user-invalid'); } catch { /* older browser */ }
+    const vmsg: string = (h as any).validationMessage || '';
+    if (userInvalid && vmsg) parts.push(`invalid:${q(clip(vmsg, 60))}`);
     return parts.join(' ');
   };
 
@@ -143,7 +165,7 @@ export function snapshotInPage(opts: SnapOptions): { items: SnapItem[]; truncate
       return { hint: sel, code: `page.locator(${q(sel)})` };
     }
     const nm = (el.getAttribute('aria-label') || name).replace(/…$/, '');
-    if (nm && !name.endsWith('…')) {
+    if (nm && !name.endsWith('…') && role !== 'file') { // "file" is fastqa's word, not an ARIA role a locator knows
       return {
         hint: `role=${role}[name=${q(nm)}]`,
         code: `page.getByRole(${q(role)}, { name: ${q(nm)}, exact: true })`,
@@ -170,6 +192,8 @@ export function snapshotInPage(opts: SnapOptions): { items: SnapItem[]; truncate
   const items: SnapItem[] = [];
   const seenText = new Set<string>();
   let truncated = false;
+  const MAX_HIDDEN_FILES = 5;
+  let hiddenFiles = 0;
 
   // Deep walk: light DOM in document order, descending into OPEN shadow roots right after their host.
   // (Closed shadow roots are unreachable from page JS by design.)
@@ -192,12 +216,17 @@ export function snapshotInPage(opts: SnapOptions): { items: SnapItem[]; truncate
     const isInfo = info.has(el);
     const isText = !isI && !isInfo && opts.mode === 'full' && el.matches(TEXT);
     if (!isI && !isInfo && !isText) continue;
-    if (!visible(el)) continue;
+    // A file input is listed even when hidden: styled upload buttons and drop zones hide the real input, which an
+    // upload step can still use. Its line says [hidden]. Only the first few: a table with an "Attach" button per row
+    // would otherwise spend the line budget on inputs whose buttons are listed anyway.
+    const fileInput = isI && el.matches('input[type=file]');
+    if (!fileInput && !visible(el)) continue;
+    if (fileInput && !visible(el) && ++hiddenFiles > MAX_HIDDEN_FILES) continue;
 
     if (isI) {
       // skip interactive elements nested in another interactive element (e.g. span[role=button] inside <a>)
       const parentI = el.parentElement?.closest(INTERACTIVE);
-      if (parentI && interactive.has(parentI) && visible(parentI)) continue;
+      if (!fileInput && parentI && interactive.has(parentI) && visible(parentI)) continue;
       const role = roleOf(el);
       const name = nameOf(el);
       let ref = el.getAttribute('data-fq');
@@ -228,7 +257,24 @@ export function snapshotInPage(opts: SnapOptions): { items: SnapItem[]; truncate
     seenText.add(txt);
     items.push({ line: `· ${q(txt)}` });
   }
-  return { items, truncated, url: location.href, title: document.title, maxRef: w.__fq.n };
+  if (hiddenFiles > MAX_HIDDEN_FILES) items.push({ line: `… ${hiddenFiles - MAX_HIDDEN_FILES} more hidden file inputs` });
+
+  // page facts for open: forms and fields at a glance, and whether a bot check stands in for the site
+  const FIELD = 'input:not([type=hidden]):not([type=submit]):not([type=button]):not([type=reset]):not([type=image]),select,textarea';
+  let forms = 0; let fields = 0; let required = 0;
+  for (const f of Array.from(document.forms)) {
+    const shownFields = Array.from(f.querySelectorAll(FIELD)).filter((x) => visible(x));
+    if (!shownFields.length) continue;
+    forms++; fields += shownFields.length; required += shownFields.filter((x) => (x as HTMLInputElement).required).length;
+  }
+  // A bot check is the interstitial page of a protection service, said in its own fixed words; "Access denied" or a
+  // "Security Checkup" page belong to the site itself. A captcha counts when its challenge is shown, not its invisible badge.
+  const BOT = /^(just a moment\b|attention required!?\s*\|\s*cloudflare|verify(ing)? (that )?you are (a )?human|are you a robot\b|checking your browser\b|checking if the site connection is secure|ddos protection by|please verify you are a human)/i;
+  const heading = clip(document.querySelector('h1')?.textContent || '', 60);
+  const botCheck = forms === 0 ? (BOT.test(document.title.trim()) ? clip(document.title, 60) : BOT.test(heading) ? heading : undefined) : undefined;
+  const captcha = Array.from(document.querySelectorAll('iframe')).some((f) => /recaptcha\/api2\/(anchor|bframe)|hcaptcha\.com|challenges\.cloudflare\.com|turnstile/i.test(f.src) && !/size=invisible/i.test(f.src) && visible(f));
+  const page = { forms, fields, required, botCheck, captcha };
+  return { items, truncated, url: location.href, title: document.title, maxRef: w.__fq.n, page };
 }
 
 // Resolves when the DOM has been quiet for `quietMs`, or after `maxMs`.

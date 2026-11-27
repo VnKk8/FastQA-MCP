@@ -1,6 +1,8 @@
 // Backward compatibility with 0.3.2: tool schemas, response formats, flow files, CLI exit codes and reports.
 // The same call script that produced docs/baseline/responses-0.3.2.txt runs against the current build.
-// The only allowed difference in text output is the additive "QA:" block.
+// The only allowed differences in text output are additive: the "QA:" block, fact lines ("↳ …") and the field-rule
+// tokens at the end of a snapshot line (type:, maxlength:, minlength:, min:, max:, step:, pattern:, invalid:"…").
+// Everything else must be byte for byte what 0.3.2 printed.
 import { readFileSync, mkdirSync, copyFileSync, mkdtempSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -14,8 +16,9 @@ const baseline = slashes(readFileSync('docs/baseline/responses-0.3.2.txt', 'utf8
 
 // ---- 1. the 0.3.2 script, output compared section by section
 const now = await runContractScript();
-const QA = /^\s*(QA[: ]|F-\d{3} |→ leads|\+\d+ more$|session S-)/;
-const strip = (s) => s.split('\n').filter((l) => !QA.test(l)).join('\n');
+const QA = /^\s*(QA[: ]|F-\d{3} |→ leads|\+\d+ more$|session S-|↳ )/;
+const RULES = / (type|maxlength|minlength|min|max|step|pattern|invalid):("(?:[^"\\]|\\.)*"|\S+)(?=( [a-z]+:| *$))/g;
+const strip = (s) => s.split('\n').filter((l) => !QA.test(l)).map((l) => l.replace(RULES, '')).join('\n');
 const sections = (s) => new Map(s.split(/^### /m).filter(Boolean).map((b) => { const i = b.indexOf('\n'); return [b.slice(0, i), b.slice(i + 1).trimEnd()]; }));
 const want = sections(baseline); const got = sections(strip(now.responses));
 check('same sections as the 0.3.2 script', [...want.keys()].join('|') === [...got.keys()].join('|'), `${[...want.keys()].join('\n')}\n--- vs ---\n${[...got.keys()].join('\n')}`);

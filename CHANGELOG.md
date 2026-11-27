@@ -2,6 +2,40 @@
 
 All notable changes to `fastqa-mcp`. Versions follow [semantic versioning](https://semver.org/).
 
+## 1.0.2 (2026-11-27)
+
+### Added
+
+- **File uploads.** `act` has an `upload` step that chooses files for a file input. The value names the files: `"photo.png"` makes a small valid PNG, `"big.jpg:6MB"` or `"edge.png:5242881"` makes a file of exactly that size, `"virus.exe"` makes filler bytes, `"a.png|b.pdf"` chooses several files and `""` clears the selection. Made images, PDFs and text files stay valid files of their type at every size, so a size limit test fails on the size and not on a broken file. Your own files come from `.fastqa/files/` as `"files/<name>"`; no other path on disk can be uploaded. The target can be the input's label, a hidden input, a styled "Upload" button or a drop zone that opens the file picker, or nothing when the page has one file input. The result gives each file's exact size and says when a file is outside the input's `accept` list. A disabled file input fails the step, as it would for a person, although the browser itself would take the files. Uploads are recorded in flows, replayed with the same bytes and exported to Playwright specs as code. File contents never appear in results, evidence or saved flows. The step costs about 40 more tokens of tool definitions (about 1,920 in total).
+
+- **Facts for the agent, so it needs fewer calls.** Each is one short line, only when there is something to say. On the normal path none adds a wait; measured against 1.0.1, a click costs about 3 ms more.
+  - **Snapshot field rules:** `type:`, `maxlength:`, `minlength:`, `min:`, `max:`, `step:` and `pattern:` at the end of a field's line. Once validation applies to the person, the browser's own message: `invalid:"Please include an '@' …"`.
+  - **What each action did,** on a `↳` line under its step in `act`:
+    - the first-party calls it made, failed ones first, with status and time;
+    - a navigation or a new tab;
+    - messages that came and went before the next action;
+    - native dialogs, downloads and file pickers, under the step during which they happened;
+    - `nothing sent: the browser blocked the form` with the invalid fields;
+    - `no effect within N ms` for a dead click;
+    - `field holds "…"` when a field keeps something other than what was typed.
+  - **The server's reason** for a failed call, only when payload capture is on for it.
+  - **Why a step failed:** the closest names with refs when a target matched nothing, the element covering a button, and the empty required fields that keep a submit disabled.
+  - **Page facts on `open`:** forms and fields, a visible captcha, or a bot check page instead of the site.
+- **In the official MCP Registry.** Each release now also publishes FastQA to the [MCP Registry](https://registry.modelcontextprotocol.io) as `io.github.VnKk8/fastqa-mcp`, so directories and clients that read the registry can find it. The package gains an `mcpName` field; `server.json` in the repository describes the server, and the Release workflow keeps its version in step.
+- **New QA rules:** `SILENT-FAILURE` (a submission failed and the page showed nothing until the batch ended), `DUPLICATE-SUBMIT` (one action sent the same submission twice), `DEAD-CLICK` (a button or link changed nothing), `BROKEN-IMAGE` (a first-party image arrived but could not be shown). They run in replays too. They err on the side of silence; when one is suspected, the page gets one more second before it is judged. In strict mode, `SILENT-FAILURE` and `DUPLICATE-SUBMIT` (medium) fail a run when `failOnSeverity` is `medium` or lower.
+
+### Changed
+
+- **The 0.3.2 output format gains two additive things:** lines that start with `↳`, and tokens at the end of snapshot lines (the field rules and `invalid:"…"`). `[invalid]` keeps its 0.3 meaning. Everything else is unchanged byte for byte (checked by `bench/compat.mjs`). Clients that parse results line by line should skip `↳` lines.
+- **Native dialogs, downloads and file pickers are recorded.** fastqa now listens for them and handles dialogs exactly as Playwright did on its own before: `alert`, `confirm` and `prompt` are dismissed, `beforeunload` is accepted. Behaviour is the same; the agent is told. Listening for file pickers also keeps a headed browser from opening the native picker, which would block the run.
+- **The README opens with a 20-second animation** of real FastQA output (one call, a bug found and explained, facts, replay), and explains in plain words how FastQA differs from Playwright, its command line and Playwright MCP. The animation's source and generator are in `docs/media/`.
+- **Setup examples use `fastqa-mcp@latest`,** so npx looks for a new release each time instead of reusing an older downloaded copy. Pin a version (`fastqa-mcp@1.0.2`) to stay on one.
+- **The snapshot shows file inputs as `file`**, not `textbox`, with the chosen file names, the accepted types, and `[hidden]` for hidden inputs, which are now listed too (at most 5 per frame; the rest are counted in one line). `fill` on a file input fails with a message that points to `upload` instead of Playwright's "Input of type file cannot be filled".
+
+### Fixed
+
+- **The OpenCode example in the README repeated `"FASTQA_COOKIES"`,** a duplicate key that editors and schema checks flag. Every JSON example in the README and the reference is now checked by `npm test` (it must parse and have no duplicate keys).
+
 ## 1.0.1 (2026-11-27)
 
 ### Added

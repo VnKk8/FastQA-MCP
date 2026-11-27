@@ -1,5 +1,5 @@
 /** Steps that drive the page. Assertions and waits are passive: they never count as the origin of a request. */
-export const INTERACTIVE = /^(goto|click|dblclick|hover|fill|type|press|select|check|uncheck)$/;
+export const INTERACTIVE = /^(goto|click|dblclick|hover|fill|type|press|select|check|uncheck|upload)$/;
 const MAX_ACTIONS = 1000;
 /** A request that starts while the step itself executes, or this soon after it returned, is driven by that step. */
 const PROMPT_MS = 100;

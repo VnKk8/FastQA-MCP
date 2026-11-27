@@ -2,9 +2,14 @@ import { auditA11y } from './a11y.js';
 import { Session, DEFAULT_TIMEOUT, sleep, AmbiguousTargetError, warnLegacyTls, type Step, type RecordedStep } from './session.js';
 import { redactor } from './privacy/redact.js';
 import { dismissCookies, describeOutcome, COOKIE_CHOICES, COOKIE_WAIT_MS, COOKIE_RECHECK_MS, type CookieChoice } from './cookies.js';
+import { prepareUpload, accepts, sendAsBytes, asBytes } from './upload.js';
+import type { FileChooser, Locator } from 'playwright';
+
+/** How long an upload step waits for the file picker once its click on an element that is not a file input has landed. */
+const CHOOSER_WAIT_MS = 2000;
 
 export const STEP_KINDS = [
-  'goto', 'click', 'dblclick', 'hover', 'fill', 'type', 'press', 'select', 'check', 'uncheck', 'wait', 'cookies',
+  'goto', 'click', 'dblclick', 'hover', 'fill', 'type', 'press', 'select', 'check', 'uncheck', 'wait', 'cookies', 'upload',
   'expect_text', 'expect_no_text', 'expect_url', 'expect_title', 'expect_value',
   'expect_visible', 'expect_hidden', 'expect_enabled', 'expect_disabled', 'expect_count',
   'expect_request', 'expect_no_errors', 'expect_accessible',
@@ -15,6 +20,8 @@ export interface StepResult {
   ms: number;
   line: string;
   recorded?: RecordedStep;
+  /** facts for the agent about this step (act results only): what a field holds, why a step failed */
+  facts?: string[];
 }
 
 const q = JSON.stringify;
@@ -53,6 +60,8 @@ export async function runStep(session: Session, s: Step, tmpl?: Step): Promise<S
   const label = labelOf(tmpl ?? s);
   let recorded: RecordedStep | undefined = { ...s };
   let note = '';
+  const facts: string[] = [];
+  let target: Locator | undefined; // the element the step acted on, to explain a failure
   try {
     switch (s.do) {
       case 'goto': {
@@ -75,6 +84,7 @@ export async function runStep(session: Session, s: Step, tmpl?: Step): Promise<S
       }
       case 'click': case 'dblclick': case 'hover': case 'check': case 'uncheck': {
         const r = await session.resolve(need(s, 'target'), 'click', timeout, s.frame);
+        target = r.loc;
         if (s.do === 'click') await r.loc.click({ timeout });
         if (s.do === 'dblclick') await r.loc.dblclick({ timeout });
         if (s.do === 'hover') await r.loc.hover({ timeout });
@@ -91,7 +101,22 @@ export async function runStep(session: Session, s: Step, tmpl?: Step): Promise<S
         if (used?.length && s.do !== 'select' && (/pass|pwd|secret|token/i.test(s.target || '') || await r.loc.evaluate((el) => (el as HTMLInputElement).type === 'password').catch(() => false))) {
           for (const [k, v] of used) redactor.addSecret(v, k);
         }
-        if (s.do === 'fill') await r.loc.fill(value, { timeout });
+        if (s.do === 'fill') {
+          try { await r.loc.fill(value, { timeout }); }
+          catch (e: any) {
+            if (!/Input of type "file" cannot be filled/.test(String(e?.message))) throw e;
+            throw new Error(`${q(s.target)} is a file input: use the upload step, e.g. {"do":"upload","target":${q(s.target)},"value":"photo.png"}`);
+          }
+          // a field that keeps something else than was typed (maxlength, an input mask, a number field) is a fact
+          // the agent would otherwise only find by reading the value back. Never for passwords or secret values.
+          if (!used?.length && !/pass|pwd|secret|token/i.test(s.target || '')) {
+            const held = await r.loc.evaluate((el: any) => (el.type === 'password' || el.value === undefined ? null : { v: String(el.value), ml: el.maxLength })).catch(() => null);
+            if (held && held.v !== value) {
+              const cut = held.ml > 0 && value.length > held.ml && held.v === value.slice(0, held.ml);
+              facts.push(`field holds ${q(held.v.length > 60 ? held.v.slice(0, 59) + '…' : held.v)}${cut ? ` (maxlength ${held.ml})` : ''}`);
+            }
+          }
+        }
         if (s.do === 'type') { await r.loc.click({ timeout }); await r.loc.pressSequentially(value, { delay: 10 }); }
         if (s.do === 'select') {
           try { await r.loc.selectOption({ label: value }, { timeout: Math.min(timeout, 1500) }); }
@@ -136,6 +161,40 @@ export async function runStep(session: Session, s: Step, tmpl?: Step): Promise<S
         session.consentAsked.add(origin);
         note = describeOutcome(out, choice);
         recorded = { do: 'cookies', value: choice, code: `await fq.cookies(${q(choice)});` };
+        break;
+      }
+      case 'upload': {
+        // The files are ready (or the value refused) before any waiting for the target.
+        const files = await prepareUpload(s.value ?? '', () => session.uploadDir());
+        const paths = files.map((f) => f.path);
+        // paths when the browser can open them (fast, no size limit); otherwise the bytes themselves
+        const payload = sendAsBytes(paths, { platform: process.platform, cdpUrl: process.env.FASTQA_CDP_URL }) ? await asBytes(files) : paths;
+        const r = await session.resolveUpload(s.target, timeout, s.frame);
+        let accept = '';
+        if (r.input) {
+          // setInputFiles ignores `disabled`; a person cannot choose a file there, so neither can the step
+          const disabled = () => r.loc.evaluate((el: any) => !!(el.control ?? el).disabled);
+          if (!(await poll(async () => !(await disabled()), timeout))) throw new Error('the file input is disabled');
+          accept = await r.loc.evaluate((el: any) => (el.control ?? el).accept || '').catch(() => '');
+          await r.loc.setInputFiles(payload, { timeout });
+        } else {
+          // a styled button or drop zone: its click opens the file picker, which gets the files. The wait for the picker
+          // starts when the click has landed, so a button that takes a while to become clickable is not misjudged.
+          let fc: FileChooser | undefined; let wake = () => {};
+          const onChooser = (c: FileChooser) => { fc = c; wake(); };
+          page.on('filechooser', onChooser);
+          session.uploading = true; // this picker is the step's own, not news for the facts
+          try {
+            await r.loc.click({ timeout });
+            if (!fc) await new Promise<void>((res) => { wake = res; setTimeout(res, CHOOSER_WAIT_MS); });
+          } finally { page.off('filechooser', onChooser); session.uploading = false; }
+          const chooser = fc as FileChooser | undefined;
+          if (!chooser) throw new Error(`clicking ${q(s.target)} opened no file picker. Target the file input itself: the snapshot lists it as "file", hidden ones too`);
+          accept = await chooser.element().evaluate((el: any) => el.accept || '').catch(() => '');
+          await chooser.setFiles(payload, { timeout });
+        }
+        note = files.length ? files.map((f) => `${f.name} (${f.detail}${accepts(accept, f.name) ? '' : `; not in accept=${q(accept)}`})`).join(', ') : 'selection cleared';
+        recorded = { ...s, target: r.record, frame: r.frame, code: `await fq.upload(${r.code}, ${V(s.value ?? '')});` };
         break;
       }
       case 'expect_text': case 'expect_no_text': {
@@ -267,11 +326,35 @@ export async function runStep(session: Session, s: Step, tmpl?: Step): Promise<S
         throw new Error(`Unknown step "${s.do}". Valid: ${STEP_KINDS.join(', ')}`);
     }
     if (recorded && tmpl?.value !== undefined) recorded.value = tmpl.value;
-    return { ok: true, ms: Date.now() - t0, line: `✓ ${label}${note ? ' — ' + note : ''} (${Date.now() - t0}ms)`, recorded };
+    return { ok: true, ms: Date.now() - t0, line: `✓ ${label}${note ? ' — ' + note : ''} (${Date.now() - t0}ms)`, recorded, facts };
   } catch (e: any) {
-    const msg = String(e?.message || e).split('\n')[0].replace(/^locator\.\w+: /, '');
-    return { ok: false, ms: Date.now() - t0, line: `✗ ${label} — ${msg}` };
+    const full = String(e?.message || e);
+    const msg = full.split('\n')[0].replace(/^locator\.\w+: /, '');
+    return { ok: false, ms: Date.now() - t0, line: `✗ ${label} — ${msg}`, facts: [...facts, ...await explain(full, s, target)] };
   }
+}
+
+/**
+ * Why an action on a found element did not happen, from Playwright's own log of its attempts: an element on top that
+ * takes the click, or a control that stayed disabled (with the form fields that keep it so). Read only on failure.
+ */
+async function explain(full: string, s: Step, target?: Locator): Promise<string[]> {
+  const who = q(s.target ?? '');
+  const cover = /(<[a-z][^>]{0,200}>)[^\n]*?intercepts pointer events/i.exec(full);
+  if (cover) return [`${who} is covered by ${cover[1].replace(/<\/[a-z]+>$/i, '')}`];
+  if (target && /element is not enabled/.test(full)) {
+    const why = await target.evaluate((el: any) => {
+      const form = el.form || el.closest('form');
+      const name = (f: any) => (f.labels?.[0]?.textContent || f.getAttribute('aria-label') || f.placeholder || f.name || '').replace(/\s+/g, ' ').trim().slice(0, 40);
+      const bad = form ? Array.from(form.querySelectorAll(':invalid')).filter((f: any) => f !== form && f !== el) : [];
+      return { empty: bad.filter((f: any) => f.validity?.valueMissing).map(name), invalid: bad.filter((f: any) => !f.validity?.valueMissing).map(name) };
+    }, undefined, { timeout: 500 }).catch(() => undefined);
+    const parts = [`${who} stayed disabled`];
+    if (why?.empty.length) parts.push(`Empty required fields: ${why.empty.slice(0, 5).map((n: string) => q(n)).join(', ')}`);
+    if (why?.invalid.length) parts.push(`Invalid fields: ${why.invalid.slice(0, 5).map((n: string) => q(n)).join(', ')}`);
+    return [parts.join('. ')];
+  }
+  return [];
 }
 
 function maskish(s: Step) {

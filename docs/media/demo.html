@@ -1,0 +1,145 @@
+<!doctype html>
+<!-- The README animation. docs/media/make-demo.mjs renders it frame by frame into fastqa-demo.gif.
+     Every result line below is real FastQA output (demo shop, demoqa.com, the facts fixtures); only the timing is staged. -->
+<html lang="en"><head><meta charset="utf-8"><title>FastQA demo</title>
+<style>
+  html, body { margin: 0; }
+  body { width: 960px; height: 540px; overflow: hidden; background: #f6f7f9; color: #111827; font-family: "Segoe UI", system-ui, sans-serif; }
+  .top { position: absolute; left: 40px; right: 40px; top: 22px; display: flex; justify-content: space-between; align-items: center; }
+  .brand { font-weight: 700; font-size: 17px; letter-spacing: .2px; }
+  .brand b { color: #16a34a; }
+  .pill { font-size: 12px; color: #374151; border: 1px solid #d1d5db; border-radius: 999px; padding: 3px 10px; background: #fff; }
+  .head { position: absolute; left: 40px; top: 62px; font-size: 30px; font-weight: 700; letter-spacing: -.3px; }
+  .sub { position: absolute; left: 40px; top: 102px; font-size: 15px; color: #4b5563; }
+  .card { position: absolute; left: 40px; right: 40px; top: 136px; height: 322px; background: #0f172a; border-radius: 12px; box-shadow: 0 6px 20px rgba(15,23,42,.18); overflow: hidden; }
+  .bar { height: 30px; display: flex; align-items: center; padding: 0 14px; gap: 6px; background: #1e293b; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: #475569; }
+  .ctitle { margin-left: 10px; font: 12px "Cascadia Mono", Consolas, monospace; color: #94a3b8; }
+  .lines { padding: 10px 16px; font: 14px/21px "Cascadia Mono", Consolas, monospace; color: #e2e8f0; white-space: pre; }
+  .ok { color: #4ade80; } .fail { color: #f87171; } .fact { color: #93c5fd; } .qa { color: #94a3b8; }
+  .hit { color: #fecaca; background: #7f1d1d; border-radius: 3px; padding: 0 3px; }
+  .strong { color: #f8fafc; font-weight: 700; }
+  .bars { position: absolute; left: 16px; right: 16px; top: 48px; font: 14px "Segoe UI", system-ui, sans-serif; color: #cbd5e1; }
+  .row { margin: 0 0 18px; }
+  .row .name { display: flex; justify-content: space-between; margin-bottom: 6px; }
+  .row .track { height: 16px; background: #1e293b; border-radius: 4px; }
+  .row .fill { height: 16px; border-radius: 4px; }
+  .note { position: absolute; left: 16px; bottom: 10px; font-size: 11px; color: #64748b; }
+  .chips { position: absolute; left: 16px; right: 16px; bottom: 18px; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+  .clabel { font-size: 11px; font-weight: 700; letter-spacing: .8px; color: #64748b; text-transform: uppercase; margin-right: 2px; }
+  .chip { font-size: 12px; color: #fecaca; background: #3f1d24; border: 1px solid #7f1d1d; border-radius: 999px; padding: 3px 8px; }
+  .stages { position: absolute; left: 40px; right: 40px; top: 472px; display: flex; gap: 14px; }
+  .stage { flex: 1; font-size: 11px; font-weight: 700; letter-spacing: .8px; color: #9ca3af; }
+  .stage.on { color: #111827; }
+  .stage .p { margin-top: 6px; height: 3px; background: #e5e7eb; border-radius: 2px; }
+  .stage .p i { display: block; height: 3px; background: #16a34a; border-radius: 2px; }
+  .foot { position: absolute; left: 40px; right: 40px; top: 512px; display: flex; justify-content: space-between; font-size: 12px; color: #6b7280; }
+  .foot code { font: 12px "Cascadia Mono", Consolas, monospace; color: #111827; }
+</style></head>
+<body>
+  <div class="top"><div class="brand">Fast<b>QA</b> MCP</div><div class="pill">browser QA for AI agents</div></div>
+  <div class="head" id="head"></div>
+  <div class="sub" id="sub"></div>
+  <div class="card"><div class="bar"><span class="dot"></span><span class="dot"></span><span class="dot"></span><span class="ctitle" id="ctitle"></span></div>
+    <div class="lines" id="lines"></div><div class="bars" id="bars"></div><div class="chips" id="chips"></div><div class="note" id="note"></div></div>
+  <div class="stages" id="stages"></div>
+  <div class="foot"><code>npx -y fastqa-mcp@latest</code><span>works with Claude Code, OpenCode and any MCP client</span></div>
+<script>
+// A line is a list of [text, class] segments. Times are in ms.
+const L = (...segs) => segs.map((s) => (typeof s === 'string' ? [s, ''] : s));
+const SCENES = [
+  { label: '01  ONE CALL', at: 0, end: 3800, head: 'A whole test in one call.', sub: 'The agent sends every step at once: fill, click, assert. One result comes back.',
+    card: 'act  ·  9 steps, one call', start: 350, step: 210, lines: [
+      L(['PASSED 9/9 steps in 1344ms', 'strong']),
+      L(['✓', 'ok'], ' fill "Email" "john@example.com" (29ms)'),
+      L(['✓', 'ok'], ' fill "Password" "•••" (4ms)'),
+      L(['✓', 'ok'], ' click "Log in" (37ms)'),
+      L(['  ↳ POST /api/login 200 263ms · → /account', 'fact']),
+      L(['✓', 'ok'], ' expect_text "Welcome back" (1ms)'),
+      L(['✓', 'ok'], ' check "css=#card-tshirt .tc" (28ms)'),
+      L(['✓', 'ok'], ' click "Add Blue T-shirt to cart" (22ms)'),
+      L(['  ↳ POST /api/cart/tshirt 200 412ms', 'fact']),
+      L(['✓', 'ok'], ' expect_text "Added to cart: Blue T-shirt" (0ms)'),
+      L(['✓', 'ok'], ' select "Currency" "GBP" (4ms)'),
+      L(['✓', 'ok'], ' expect_value "Currency" "GBP" (3ms)'),
+      L(['QA: clean · 3 requests observed', 'qa']),
+    ] },
+  { label: '02  FINDS BUGS', at: 3800, end: 7800, head: 'It reports bugs the screen doesn\'t show.', sub: 'The page says "Thank you for your order". A call behind it failed, and no step asked.',
+    card: 'act  ·  place an order', start: 350, step: 380, big: true, lines: [
+      L(['PASSED 2/2 steps in 323ms', 'strong']),
+      L(['✓', 'ok'], ' click "Place order" (38ms)'),
+      L(['  ↳ POST /api/orders 201 65ms · ', 'fact'], ['POST /api/notifications 500', 'hit'], [' 14ms', 'fact']),
+      L(['✓', 'ok'], ' expect_text "Thank you for your order" (1ms)'),
+      L(['QA: 1 new candidate finding (highest HIGH) · 2 requests observed', 'qa']),
+      L('  ', ['F-001 HIGH NET-5XX POST /api/notifications returned 500', 'hit'], ' — A-2 click "Place order"'),
+      L(['  → leads, not confirmed defects: check them with evidence before reporting success', 'qa']),
+    ] },
+  { label: '03  EXPLAINS', at: 7800, end: 12200, head: 'It explains each possible bug.', sub: 'What failed, what was expected, which click caused it, and the evidence. Leads to check, not guesses.',
+    card: 'evidence  ·  the agent asks why', start: 300, step: 330, big: true, lines: [
+      L(['$', 'qa'], ' evidence {finding: "F-001", details: true}'),
+      L(['F-001 HIGH NET-5XX', 'hit'], ' · candidate · confidence medium'),
+      L(['  POST /api/notifications returned 500', 'strong']),
+      L('  expected: ', ['no server error', 'ok'], ' · actual: ', ['HTTP 500', 'fail']),
+      L('  association: ', ['A-2 click "Place order"', 'fact'], ' (inferred) — request started during the action'),
+      L('  request R-3 POST /api/notifications → 500 · fetch · 75ms'),
+    ],
+    chips: ['failed calls', 'JS errors', 'silent failures', 'double submits', 'dead clicks', 'broken images', 'API contract breaks', 'slow calls'], chipsAt: 2700 },
+  { label: '04  FACTS', at: 12200, end: 15800, head: 'Facts instead of extra calls.', sub: 'Field rules, what a field really holds, why a step failed. No guessing, no second look.',
+    card: 'snapshot · act  ·  demoqa.com practice form', start: 350, step: 420, big: true, lines: [
+      L('e72 textbox "Mobile Number" [required] ', ['maxlength:10 minlength:10 pattern:\\d*', 'fact']),
+      L(['✓', 'ok'], ' fill "Mobile Number" "12345678901" (30ms)'),
+      L(['  ↳ field holds "1234567890" (maxlength 10)', 'fact']),
+      L(['✓', 'ok'], ' click "Submit" (66ms)'),
+      L(['  ↳ nothing sent: the browser blocked the form. Invalid: "First Name" (Please…', 'fact']),
+      L(['✗', 'fail'], ' click "Log in" — No visible element matches "Log in"'),
+      L(['  ↳ closest: button "Login" e12', 'fact']),
+    ] },
+  { label: '05  REPLAY', at: 15800, end: 20000, head: '2 calls instead of 10. Replays need no model.', sub: 'The same login-to-cart test, then the saved flow replayed in CI.',
+    card: 'benchmark  ·  flow run checkout', start: 300, step: 0, bars: true, lines: [] },
+];
+const TOTAL = 20000;
+const clamp = (x) => Math.max(0, Math.min(1, x));
+const $ = (id) => document.getElementById(id);
+$('stages').innerHTML = SCENES.map((s, i) => `<div class="stage" id="st${i}">${s.label}<div class="p"><i id="pg${i}"></i></div></div>`).join('');
+
+function render(t) {
+  t = ((t % TOTAL) + TOTAL) % TOTAL;
+  const si = SCENES.findIndex((s) => t >= s.at && t < s.end);
+  const s = SCENES[si];
+  const k = t - s.at;
+  const fade = clamp(k / 250);
+  $('head').textContent = s.head; $('head').style.opacity = fade;
+  $('sub').textContent = s.sub; $('sub').style.opacity = fade;
+  $('ctitle').textContent = s.card;
+  $('lines').style.font = s.big ? '16px/27px "Cascadia Mono", Consolas, monospace' : '';
+  $('lines').style.paddingTop = s.big ? '16px' : '';
+  $('lines').innerHTML = s.lines.map((line, i) => {
+    const a = s.start + i * s.step;
+    if (k < a) return '';
+    const o = clamp((k - a) / 160);
+    return `<div style="opacity:${o.toFixed(2)}">${line.map(([txt, cls]) => `<span class="${cls}">${txt.replace(/&/g, '&amp;').replace(/</g, '&lt;')}</span>`).join('')}</div>`;
+  }).join('');
+  $('bars').innerHTML = s.bars ? bars(k) : '';
+  $('chips').innerHTML = s.chips ? `<span class="clabel" style="opacity:${clamp((k - s.chipsAt + 200) / 200)}">reports</span>` + s.chips.map((c, i) => {
+    const a = s.chipsAt + i * 110;
+    return k < a ? '' : `<span class="chip" style="opacity:${clamp((k - a) / 150).toFixed(2)}">${c}</span>`;
+  }).join('') : '';
+  $('note').textContent = s.bars ? 'Bundled demo shop, one machine (npm run bench). End-to-end assumes 3 s per model turn.' : '';
+  SCENES.forEach((x, i) => {
+    $(`st${i}`).className = 'stage' + (i === si ? ' on' : '');
+    $(`pg${i}`).style.width = `${(i < si ? 1 : i === si ? clamp(k / (x.end - x.at)) : 0) * 100}%`;
+  });
+}
+
+function bars(k) {
+  const grow = (from, target) => clamp((k - from) / 900) * target;
+  const row = (name, right, w, color, from) => `<div class="row" style="opacity:${clamp((k - from) / 200)}"><div class="name"><span>${name}</span><span>${right}</span></div><div class="track"><div class="fill" style="width:${grow(from, w)}%;background:${color}"></div></div></div>`;
+  const replay = clamp((k - 2300) / 200);
+  return row('Playwright MCP', '10 calls · ~33 s end to end', 100, '#64748b', 300)
+    + row('<b style="color:#f8fafc">FastQA</b>', '<b style="color:#4ade80">2 calls · ~8.5 s end to end</b>', 26, '#22c55e', 900)
+    + `<div style="opacity:${replay};font:14px/21px 'Cascadia Mono',Consolas,monospace;color:#e2e8f0;margin-top:20px"><span class="qa">$</span> npx fastqa-mcp run checkout<span class="qa">          # in CI: no model, no tokens</span><br><span class="ok">PASS</span> checkout (1452ms)<br><span class="strong">1/1 passed</span><br><span class="qa">report: .fastqa/reports/latest.html · junit: .fastqa/reports/latest.junit.xml</span></div>`;
+}
+window.render = render; window.TOTAL = TOTAL;
+render(Number(new URLSearchParams(location.search).get('t') || 1200));
+</script>
+</body></html>

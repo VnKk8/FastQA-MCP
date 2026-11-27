@@ -4,6 +4,8 @@ import { loadConfig } from './config.js';
 import { Observer } from './observation/observer.js';
 import { redactor } from './privacy/redact.js';
 import { FLOW_DIR } from './dirs.js';
+import { madeDir, removeMadeDirs } from './upload.js';
+import { probeInit, mergeProbes } from './probe.js';
 /** Thrown in strict locator mode when a target matches more than one element. */
 export class AmbiguousTargetError extends Error {
 }
@@ -48,6 +50,9 @@ export class Session {
     onEnd;
     /** origins whose cookie banner was already looked for in this context (see the cookies step) */
     consentAsked = new Set();
+    /** folders of files that upload steps made: the page reads a chosen file only when it uses it, so they live as long as the context */
+    madeDirs = [];
+    async uploadDir() { const d = await madeDir(); this.madeDirs.push(d); return d; }
     /** requests whose response is still arriving (unlike `pending`, which ends at the response headers) */
     loading = new Set();
     lastLoadAt = Date.now();
@@ -96,12 +101,42 @@ export class Session {
             for (const h of sessionHooks.created)
                 h(this);
             this.attachContext(this.context);
+            // the page probe: what an action did that the final snapshot cannot show (see probe.ts)
+            await this.context.addInitScript(probeInit).catch(() => { });
         }
         if (!this.page || this.page.isClosed()) {
             this.page = this.context.pages()[0] ?? (await this.context.newPage());
             this.attachPage(this.page);
+            await this.page.evaluate(probeInit).catch(() => { }); // a page that was open before (attached over CDP)
         }
         return this.page;
+    }
+    /**
+     * What the browser did outside the page since the last takeEvents(): native dialogs (handled exactly as Playwright does
+     * when nobody listens: beforeunload accepted, the others dismissed), downloads, and file pickers the page opened.
+     */
+    events = [];
+    takeEvents() { return this.events.splice(0); }
+    /** set while an upload step answers its own file picker, which is not news */
+    uploading = false;
+    note(e) { if (this.events.length < 20)
+        this.events.push(e); }
+    /** The frames whose probe is read: the page and its first-party frames (third-party frames are ads and widgets). */
+    probeFrames() {
+        const page = this.page;
+        if (!page || page.isClosed())
+            return [];
+        const first = (f) => { try {
+            return this.obs?.firstParty.has(new URL(f.url()).origin) ?? false;
+        }
+        catch {
+            return false;
+        } };
+        return [page.mainFrame(), ...page.frames().filter((f) => f !== page.mainFrame() && !f.isDetached() && first(f)).slice(0, 4)];
+    }
+    /** What the page probes saw since their previous drain (and starts a new window); undefined when none could be read. */
+    async probeDrain() {
+        return mergeProbes(await Promise.all(this.probeFrames().map((f) => f.evaluate(() => window.__fqProbe?.drain()).catch(() => undefined))));
     }
     /**
      * Listeners are bound once per context, at context level, so the first request of a new page or popup is never missed
@@ -234,9 +269,23 @@ export class Session {
                     this.page = open[open.length - 1];
             }
         };
+        // Native dialogs: recorded for the step's facts and handled exactly as Playwright does when nobody listens:
+        // beforeunload is accepted (leaving goes ahead), alert / confirm / prompt are dismissed. Behaviour is unchanged.
+        const dialog = (d) => {
+            const beforeunload = d.type() === 'beforeunload';
+            this.note({ kind: 'dialog', type: d.type(), text: redactor.text(d.message().replace(/\s+/g, ' ').trim().slice(0, 80)) });
+            (beforeunload ? d.accept() : d.dismiss()).catch(() => { });
+        };
+        const download = (d) => this.note({ kind: 'download', text: redactor.text(d.suggestedFilename().slice(0, 80)) });
+        // Listening also keeps a headed browser from opening the native picker, which would block the run.
+        const picker = () => { if (!this.uploading)
+            this.note({ kind: 'picker', text: '' }); };
         page.on('framenavigated', nav);
         page.on('close', closed);
-        this.detachers.push(() => { page.off('framenavigated', nav); page.off('close', closed); });
+        page.on('dialog', dialog);
+        page.on('download', download);
+        page.on('filechooser', picker);
+        this.detachers.push(() => { page.off('framenavigated', nav); page.off('close', closed); page.off('dialog', dialog); page.off('download', download); page.off('filechooser', picker); });
     }
     /** maxMs: longest to wait for the context to close (only `close` sets it: the browser is closed right after anyway). */
     async closeContext(maxMs) {
@@ -267,6 +316,8 @@ export class Session {
         this.lastLines = [];
         this.hints.clear();
         this.consentAsked.clear();
+        this.events = [];
+        await removeMadeDirs(this.madeDirs.splice(0));
     }
     /**
      * Closes the browser and answers when it is gone: 'closed', or 'pending' if it had not exited when the time was up.
@@ -344,7 +395,7 @@ export class Session {
         for (const it of items)
             if (it.ref && it.hint)
                 this.hints.set(it.ref, { hint: it.hint, code: it.code, frame: it.frame, gen: this.docGen });
-        return { items, truncated, url: res.url, title: res.title };
+        return { items, truncated, url: res.url, title: res.title, page: res.page };
     }
     /** Visible child frames with their selector chain from the top page (nested frames supported). */
     async listFrames() {
@@ -500,6 +551,92 @@ export class Session {
                 scopes = await this.scopesFor(frame); // frames may appear late
         } while (Date.now() < deadline);
         throw new Error(`No visible element matches "${t}"${frame ? ` in frame "${frame}"` : ''} (tried ${intent === 'fill' ? 'label, placeholder, textbox' : 'role+name, label, text'} in page, shadow DOM and iframes)`);
+    }
+    /**
+     * Target of an upload step. `input` true: a file input (or its label) that takes the files directly. false: a visible
+     * element, such as a styled button or a drop zone, whose click opens the file picker.
+     *  - no target           -> the page's only file input (waits for one to appear; several are listed)
+     *  - ref "e12"           -> that element (the snapshot also lists hidden file inputs)
+     *  - selector or label   -> a file input it names, also a hidden one: styled upload widgets hide the real input
+     *  - anything else       -> the visible element, resolved like a click target
+     */
+    async resolveUpload(target, timeout = DEFAULT_TIMEOUT, frame) {
+        const isInput = (loc) => loc.evaluate((el) => (el.tagName === 'INPUT' && el.type === 'file') || el.control?.type === 'file').catch(() => false);
+        const t = target?.trim();
+        const fr = (c) => (c.length ? c : undefined);
+        if (t && /^e\d+$/.test(t)) {
+            const r = await this.resolve(t, 'click', timeout, frame);
+            return { ...r, input: await isInput(r.loc) };
+        }
+        const FILE = 'input[type=file]';
+        const strict = this.strictNow ?? this.cfg?.strictLocators ?? false;
+        const deadline = Date.now() + timeout;
+        const q = JSON.stringify;
+        // File inputs the target names, visible or not; without a target, every file input. Exact label matches in every
+        // frame come before loose ones, as in resolve(). The recorded code keeps the file-input filter, so an exported spec
+        // picks the same element.
+        const direct = async () => {
+            const scopes = await this.scopesFor(frame);
+            const passes = t && !/^(testid=|css=|xpath=|#|\[|\.|\/\/)/.test(t) ? [true, false] : [true];
+            for (const exact of passes) {
+                const hits = [];
+                for (const chain of scopes) {
+                    const sc = this.scope(chain);
+                    const pre = Session.codePrefix(chain);
+                    const file = sc.locator(FILE);
+                    const fileCode = `${pre}.locator(${q(FILE)})`;
+                    const [loc, code] = !t ? [file, fileCode]
+                        : /^testid=/.test(t) ? [sc.getByTestId(t.slice(7)).and(file), `${pre}.getByTestId(${q(t.slice(7))}).and(${fileCode})`]
+                            : /^(css=|xpath=|#|\[|\.|\/\/)/.test(t) ? [sc.locator(t.replace(/^css=/, '')).and(file), `${pre}.locator(${q(t.replace(/^css=/, ''))}).and(${fileCode})`]
+                                : exact ? [sc.getByLabel(t, { exact: true }).and(file), `${pre}.getByLabel(${q(t)}, { exact: true }).and(${fileCode})`]
+                                    : [sc.getByLabel(t).and(file), `${pre}.getByLabel(${q(t)}).and(${fileCode})`];
+                    const n = await loc.count().catch(() => 0);
+                    if (n)
+                        hits.push({ loc, code, chain, n });
+                }
+                if (hits.length)
+                    return hits;
+            }
+            return [];
+        };
+        if (!t) {
+            for (;;) {
+                const hits = await direct();
+                const total = hits.reduce((a, h) => a + h.n, 0);
+                if (total === 1)
+                    return { loc: hits[0].loc.first(), code: hits[0].code, frame: fr(hits[0].chain), input: true };
+                if (total > 1) {
+                    const names = [];
+                    for (const h of hits)
+                        names.push(...await h.loc.evaluateAll((els) => els.map((el) => {
+                            const lab = (el.labels?.[0]?.textContent || el.getAttribute('aria-label') || el.name || el.id || '').replace(/\s+/g, ' ').trim();
+                            return lab ? JSON.stringify(lab.slice(0, 40)) : '(unnamed)';
+                        })).catch(() => []));
+                    throw new Error(`${total} file inputs on the page: ${names.slice(0, 6).join(', ')}${total > 6 ? ', …' : ''}. Choose one with target`);
+                }
+                if (Date.now() >= deadline)
+                    throw new Error('no file input on the page. Give the element that opens the file picker as target');
+                await sleep(100);
+            }
+        }
+        // Until the deadline: a file input the target names (it may be added late, and hidden), else a visible element.
+        for (;;) {
+            const hits = await direct();
+            if (hits.length) {
+                const h = hits[0];
+                if (h.n > 1 && strict)
+                    throw new AmbiguousTargetError(`"${t}" matches ${h.n} file inputs and strict mode will not pick one. Use a ref from the snapshot`);
+                return { loc: h.loc.first(), record: t, code: h.n > 1 ? `${h.code}.first()` : h.code, frame: fr(h.chain), input: true };
+            }
+            try {
+                const r = await this.resolve(t, 'click', Math.min(300, Math.max(1, deadline - Date.now())), frame);
+                return { ...r, input: await isInput(r.loc) };
+            }
+            catch (e) {
+                if (e instanceof AmbiguousTargetError || Date.now() >= deadline)
+                    throw e;
+            }
+        }
     }
     /** Stamps refs on the first matches and describes them compactly, so the caller can retry with an exact ref. */
     async describeAmbiguous(v, n, t, chain) {

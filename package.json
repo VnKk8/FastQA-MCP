@@ -1,6 +1,7 @@
 {
   "name": "fastqa-mcp",
   "version": "1.0.1",
+  "mcpName": "io.github.VnKk8/fastqa-mcp",
   "description": "MCP server with a QA mindset that lets an LLM drive and test web UI applications. Batched actions, built-in assertions, network call and status code recording, and record-and-replay with zero LLM calls.",
   "repository": {
     "type": "git",
@@ -25,8 +26,8 @@
     "prepublishOnly": "npm run build",
     "demo": "node bench/demo-server.mjs",
     "test": "npm run build && npm run test:unit && npm run test:e2e",
-    "test:unit": "node --test bench/unit.mjs bench/unit-review.mjs bench/unit-contract.mjs bench/unit-discovery.mjs",
-    "test:e2e": "node bench/e2e.mjs && node bench/export-check.mjs && node bench/qa-features.mjs && node bench/compat.mjs && node bench/observe.mjs && node bench/privacy.mjs && node bench/policy.mjs && node bench/safety.mjs && node bench/artifacts.mjs && node bench/review.mjs && node bench/cookies.mjs",
+    "test:unit": "node --test bench/unit.mjs bench/unit-review.mjs bench/unit-contract.mjs bench/unit-discovery.mjs bench/unit-upload.mjs bench/unit-facts.mjs bench/unit-docs.mjs bench/unit-registry.mjs",
+    "test:e2e": "node bench/e2e.mjs && node bench/export-check.mjs && node bench/qa-features.mjs && node bench/compat.mjs && node bench/observe.mjs && node bench/privacy.mjs && node bench/policy.mjs && node bench/safety.mjs && node bench/artifacts.mjs && node bench/review.mjs && node bench/cookies.mjs && node bench/upload.mjs && node bench/facts.mjs",
     "perf": "npm run build && node bench/perf.mjs",
     "test:package": "npm run build && node bench/package-smoke.mjs",
     "test:env": "npm run build && node bench/cdp-tls.mjs",
