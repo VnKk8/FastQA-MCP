@@ -46,6 +46,10 @@ test('the Release workflow keeps server.json in step and publishes it after npm'
   assert.match(workflow, /git add package\.json package-lock\.json server\.json dist/, 'the release commit includes server.json');
   assert.match(workflow, /needs: release[\s\S]*mcp-publisher login github-oidc[\s\S]*mcp-publisher publish/, 'a registry job after the npm release');
   assert.match(workflow, /MCP_PUBLISHER_VERSION: v\d+\.\d+\.\d+/, 'mcp-publisher is pinned');
+  // npm can take many minutes to validate a new version before it is public; the registry checks npm, so the job
+  // must wait for npm first (1.0.2: the registry job gave up after 2.5 minutes while npm was still validating)
+  assert.match(workflow, /Wait until npm shows this version[\s\S]*npm view "fastqa-mcp@\$VERSION" version[\s\S]*mcp-publisher publish/, 'the registry job waits for npm before publishing');
+  assert.match(workflow, /timeout-minutes: \d+/, 'and has a time limit');
   // the bump rewrites the file with JSON.stringify(…, null, 2): keep the file in that layout so releases make clean diffs
   assert.equal(raw.replace(/\r\n/g, '\n'), JSON.stringify(server, null, 2) + '\n'); // a Windows checkout may have CRLF
 });

@@ -2,6 +2,12 @@
 
 All notable changes to `fastqa-mcp`. Versions follow [semantic versioning](https://semver.org/).
 
+## Unreleased
+
+### Fixed
+
+- **The Release workflow's MCP Registry job waits for npm.** npm can take many minutes to validate a new version after `npm publish` returns; for 1.0.2 the job gave up after 2.5 minutes. It now waits until npm shows the version (up to 45 minutes) before publishing to the registry, and its error message no longer claims npm already has the version.
+
 ## 1.0.2 (2026-11-27)
 
 ### Added

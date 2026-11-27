@@ -591,4 +591,5 @@ A last job publishes `server.json` to the [official MCP Registry](https://regist
 - It logs in with GitHub's OIDC token, so no secret is stored. That token grants the `io.github.VnKk8` namespace exactly as the owner's name is written; the registry compares case-sensitively.
 - The registry checks that the npm package's `mcpName` matches the name in `server.json`. `bench/unit-registry.mjs` checks the same, along with the versions and the 100-character description limit, before every release.
 - `mcp-publisher` is pinned (`MCP_PUBLISHER_VERSION`) and its signature is verified before it runs.
-- If only this job fails, re-run it: npm and GitHub are already released.
+- `npm publish` finishing does not mean the version is public yet: npm can take many minutes to validate it. The job waits until npm shows the new version (checking every 30 s, for up to 45 minutes) before it publishes to the registry.
+- If only this job fails, re-run it (Actions → the Release run → Re-run failed jobs). It never touches npm or GitHub.

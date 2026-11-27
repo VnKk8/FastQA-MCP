@@ -16,8 +16,9 @@ name: Release
 #
 # MCP Registry side: after npm and GitHub are released, the "registry" job publishes server.json to the official
 # MCP Registry as io.github.VnKk8/fastqa-mcp. It logs in with GitHub's OIDC token, so no secret is stored either.
-# The registry checks that the npm package's "mcpName" matches the name in server.json. If only this job fails,
-# re-run it: npm and GitHub are already done.
+# The registry checks that the npm package's "mcpName" matches the name in server.json, so the job first waits (up to
+# 45 minutes) until npm shows the new version: npm can take that long to validate a release. If only this job fails,
+# re-run it: it never touches npm or GitHub.
 
 on:
   workflow_dispatch:
@@ -160,6 +161,7 @@ jobs:
     name: Publish to the MCP Registry
     needs: release
     runs-on: ubuntu-24.04
+    timeout-minutes: 60
     permissions:
       contents: read
       id-token: write # MCP Registry login with GitHub's OIDC token: grants the io.github.VnKk8 namespace
@@ -189,10 +191,27 @@ jobs:
           tar xzf "$archive" mcp-publisher
           rm -f "$archive" "$archive.sigstore.json"
 
+      # `npm publish` returning is not the version being public: npm can take many minutes to validate a new version
+      # (1.0.2 took longer than the 2.5 minutes this job used to wait). The registry checks npm, so wait for npm first.
+      - name: Wait until npm shows this version
+        env:
+          VERSION: ${{ needs.release.outputs.version }}
+        run: |
+          for check in $(seq 1 90); do
+            if npm view "fastqa-mcp@$VERSION" version >/dev/null 2>&1; then
+              echo "npm shows fastqa-mcp@$VERSION"
+              exit 0
+            fi
+            echo "npm does not show fastqa-mcp@$VERSION yet (check $check of 90); waiting 30 s"
+            sleep 30
+          done
+          echo "::error::npm still does not show fastqa-mcp@$VERSION after 45 minutes; it may still be validating. Re-run this job once https://www.npmjs.com/package/fastqa-mcp/v/$VERSION opens."
+          exit 1
+
       - name: Log in to the MCP Registry
         run: ./mcp-publisher login github-oidc
 
-      # npm can take a moment to show a new version to the registry's check, so a refusal is retried a few times
+      # npm's mirrors may lag behind what the step above saw, so a refusal is retried a few times
       - name: Publish server.json
         env:
           VERSION: ${{ needs.release.outputs.version }}
@@ -205,5 +224,5 @@ jobs:
             echo "Attempt $attempt failed; retrying in 30 s"
             sleep 30
           done
-          echo "::error::Could not publish to the MCP Registry. npm and GitHub already have v$VERSION; re-run this job once the cause above is fixed."
+          echo "::error::npm shows fastqa-mcp@$VERSION, but the MCP Registry refused it (see above). Re-run this job once the cause is fixed; npm and GitHub are not touched by it."
           exit 1
