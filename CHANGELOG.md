@@ -21,6 +21,7 @@ All notable changes to `fastqa-mcp`. Versions follow [semantic versioning](https
   - **The server's reason** for a failed call, only when payload capture is on for it.
   - **Why a step failed:** the closest names with refs when a target matched nothing, the element covering a button, and the empty required fields that keep a submit disabled.
   - **Page facts on `open`:** forms and fields, a visible captcha, or a bot check page instead of the site.
+- **In the official MCP Registry.** Each release now also publishes FastQA to the [MCP Registry](https://registry.modelcontextprotocol.io) as `io.github.VnKk8/fastqa-mcp`, so directories and clients that read the registry can find it. The package gains an `mcpName` field; `server.json` in the repository describes the server, and the Release workflow keeps its version in step.
 - **New QA rules:** `SILENT-FAILURE` (a submission failed and the page showed nothing until the batch ended), `DUPLICATE-SUBMIT` (one action sent the same submission twice), `DEAD-CLICK` (a button or link changed nothing), `BROKEN-IMAGE` (a first-party image arrived but could not be shown). They run in replays too. They err on the side of silence; when one is suspected, the page gets one more second before it is judged. In strict mode, `SILENT-FAILURE` and `DUPLICATE-SUBMIT` (medium) fail a run when `failOnSeverity` is `medium` or lower.
 
 ### Changed

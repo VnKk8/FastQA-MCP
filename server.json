@@ -1,0 +1,62 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.VnKk8/fastqa-mcp",
+  "title": "FastQA MCP",
+  "description": "Browser QA for AI agents: whole tests in one call, finds and explains hidden bugs, CI replay.",
+  "repository": {
+    "url": "https://github.com/VnKk8/FastQA-MCP",
+    "source": "github"
+  },
+  "version": "1.0.1",
+  "packages": [
+    {
+      "registryType": "npm",
+      "identifier": "fastqa-mcp",
+      "version": "1.0.1",
+      "transport": {
+        "type": "stdio"
+      },
+      "environmentVariables": [
+        {
+          "name": "FASTQA_HEADED",
+          "description": "Show the browser window instead of running it hidden.",
+          "format": "boolean",
+          "default": "false"
+        },
+        {
+          "name": "FASTQA_COOKIES",
+          "description": "What every page that opens does with a cookie banner: leave it, accept it or reject it.",
+          "choices": [
+            "keep",
+            "accept",
+            "reject"
+          ],
+          "default": "keep"
+        },
+        {
+          "name": "FASTQA_TIMEOUT_MS",
+          "description": "How long one step waits for the page, in milliseconds.",
+          "format": "number",
+          "default": "5000"
+        },
+        {
+          "name": "FASTQA_QUALITY",
+          "description": "How findings are handled: observe reports them, strict also fails a replay on them, off disables them.",
+          "choices": [
+            "observe",
+            "strict",
+            "discovery",
+            "debug",
+            "off"
+          ]
+        },
+        {
+          "name": "FASTQA_DIR",
+          "description": "Folder for saved flows, reports, files to upload and settings.",
+          "format": "filepath",
+          "default": ".fastqa"
+        }
+      ]
+    }
+  ]
+}

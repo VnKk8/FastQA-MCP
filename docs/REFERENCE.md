@@ -584,4 +584,11 @@ Releases are automated by `.github/workflows/publish.yml`. Don't run `npm publis
 - **Manually:** Actions → **Release** → **Run workflow**, then pick `patch`, `minor` or `major`, or type an exact version.
 - **On merge:** label a pull request `release:patch`, `release:minor` or `release:major` before merging it into `main`. Merged pull requests without one of these labels publish nothing.
 
-The workflow bumps the version in `package.json`, runs the tests, publishes to npm with trusted publishing (with a provenance attestation), then pushes a `vX.Y.Z` commit and tag and creates the GitHub release. The server reads its version from `package.json`, so nothing else needs changing. Add the new version's notes to `CHANGELOG.md`.
+The workflow bumps the version in `package.json` and `server.json`, runs the tests, publishes to npm with trusted publishing (with a provenance attestation), then pushes a `vX.Y.Z` commit and tag and creates the GitHub release. The server reads its version from `package.json`, so nothing else needs changing. Add the new version's notes to `CHANGELOG.md`.
+
+A last job publishes `server.json` to the [official MCP Registry](https://registry.modelcontextprotocol.io) as `io.github.VnKk8/fastqa-mcp`. The registry stores this description of the server, not the package, and other directories and clients read from it.
+
+- It logs in with GitHub's OIDC token, so no secret is stored. That token grants the `io.github.VnKk8` namespace exactly as the owner's name is written; the registry compares case-sensitively.
+- The registry checks that the npm package's `mcpName` matches the name in `server.json`. `bench/unit-registry.mjs` checks the same, along with the versions and the 100-character description limit, before every release.
+- `mcp-publisher` is pinned (`MCP_PUBLISHER_VERSION`) and its signature is verified before it runs.
+- If only this job fails, re-run it: npm and GitHub are already released.
