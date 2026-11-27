@@ -81,6 +81,13 @@ export class Session {
   options: { bundle?: boolean; baseline?: 'record' | 'check' } = {};
   /** called when a session ends (context closed), before the observer is replaced */
   onEnd?: (obs: Observer) => Promise<void> | void;
+  /** origins whose cookie banner was already looked for in this context (see the cookies step) */
+  consentAsked = new Set<string>();
+  /** requests whose response is still arriving (unlike `pending`, which ends at the response headers) */
+  private loading = new Set<unknown>();
+  private lastLoadAt = Date.now();
+  /** How long the page has fetched nothing, in ms: 0 while a response is still arriving. */
+  quietFor(): number { return this.loading.size ? 0 : Date.now() - this.lastLoadAt; }
   /** counts main-frame navigations: a ref issued on an older document is stale */
   docGen = 0;
   private detachers: Array<() => void> = [];
@@ -162,6 +169,7 @@ export class Session {
     on('request', (r: import('playwright').Request) => {
       if (foreign(r)) return;
       this.pending.add(r); this.inflight = this.pending.size;
+      this.loading.add(r); this.lastLoadAt = Date.now();
       const p = pageOf(r); if (p) this.obs.onRequest(p, r);
     });
     on('response', (res: import('playwright').Response) => {
@@ -174,10 +182,10 @@ export class Session {
         this.addLog({ kind: 'http', method: r.method(), url: r.url(), status: res.status(), text: `${res.status()} ${r.method()} ${url}`, rid: rec?.id });
       if (res.status() >= 400 && !/favicon/.test(r.url())) push(this.evidence.failedRequests, `${res.status()} ${r.method()} ${url}`);
     });
-    on('requestfinished', (r: import('playwright').Request) => { if (foreign(r)) return; this.pending.delete(r); this.inflight = this.pending.size; this.obs.onFinished(r); });
+    on('requestfinished', (r: import('playwright').Request) => { if (foreign(r)) return; this.pending.delete(r); this.inflight = this.pending.size; this.loading.delete(r); this.lastLoadAt = Date.now(); this.obs.onFinished(r); });
     on('requestfailed', (r: import('playwright').Request) => {
       if (foreign(r)) return;
-      this.pending.delete(r); this.inflight = this.pending.size;
+      this.pending.delete(r); this.inflight = this.pending.size; this.loading.delete(r); this.lastLoadAt = Date.now();
       const p = pageOf(r); const rec = p ? this.obs.onFailed(p, r) : undefined;
       if (/ERR_ABORTED/.test(r.failure()?.errorText ?? '')) return; // aborts are recorded by the observer, not reported as failures
       const url = rec?.url ?? redactor.networkUrl(r.url());
@@ -195,6 +203,7 @@ export class Session {
       this.obs.onPage(page, 'page_closed');
       // its open requests will never finish: stop waiting for them
       for (const r of [...this.pending] as import('playwright').Request[]) { try { if (r.frame().page() === page) this.pending.delete(r); } catch { /* no frame: leave it */ } }
+      for (const r of [...this.loading] as import('playwright').Request[]) { try { if (r.frame().page() === page) this.loading.delete(r); } catch { /* no frame: leave it */ } }
       this.inflight = this.pending.size;
       // a popup that closes hands control back to the page that is still open
       if (this.page === page) { const open = this.context?.pages().filter((p) => !p.isClosed()) ?? []; if (open.length) this.page = open[open.length - 1]; }
@@ -215,8 +224,8 @@ export class Session {
       const closing = this.context.close().catch(() => {});
       await (maxMs === undefined ? closing : within(closing, maxMs));
     }
-    this.context = undefined; this.page = undefined; this.inflight = 0; this.pending.clear();
-    this.lastLines = []; this.hints.clear();
+    this.context = undefined; this.page = undefined; this.inflight = 0; this.pending.clear(); this.loading.clear();
+    this.lastLines = []; this.hints.clear(); this.consentAsked.clear();
   }
 
   /**

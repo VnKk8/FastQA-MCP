@@ -46,6 +46,13 @@ export class Session {
     options = {};
     /** called when a session ends (context closed), before the observer is replaced */
     onEnd;
+    /** origins whose cookie banner was already looked for in this context (see the cookies step) */
+    consentAsked = new Set();
+    /** requests whose response is still arriving (unlike `pending`, which ends at the response headers) */
+    loading = new Set();
+    lastLoadAt = Date.now();
+    /** How long the page has fetched nothing, in ms: 0 while a response is still arriving. */
+    quietFor() { return this.loading.size ? 0 : Date.now() - this.lastLoadAt; }
     /** counts main-frame navigations: a ref issued on an older document is stale */
     docGen = 0;
     detachers = [];
@@ -157,6 +164,8 @@ export class Session {
                 return;
             this.pending.add(r);
             this.inflight = this.pending.size;
+            this.loading.add(r);
+            this.lastLoadAt = Date.now();
             const p = pageOf(r);
             if (p)
                 this.obs.onRequest(p, r);
@@ -176,12 +185,14 @@ export class Session {
                 push(this.evidence.failedRequests, `${res.status()} ${r.method()} ${url}`);
         });
         on('requestfinished', (r) => { if (foreign(r))
-            return; this.pending.delete(r); this.inflight = this.pending.size; this.obs.onFinished(r); });
+            return; this.pending.delete(r); this.inflight = this.pending.size; this.loading.delete(r); this.lastLoadAt = Date.now(); this.obs.onFinished(r); });
         on('requestfailed', (r) => {
             if (foreign(r))
                 return;
             this.pending.delete(r);
             this.inflight = this.pending.size;
+            this.loading.delete(r);
+            this.lastLoadAt = Date.now();
             const p = pageOf(r);
             const rec = p ? this.obs.onFailed(p, r) : undefined;
             if (/ERR_ABORTED/.test(r.failure()?.errorText ?? ''))
@@ -205,6 +216,13 @@ export class Session {
                 try {
                     if (r.frame().page() === page)
                         this.pending.delete(r);
+                }
+                catch { /* no frame: leave it */ }
+            }
+            for (const r of [...this.loading]) {
+                try {
+                    if (r.frame().page() === page)
+                        this.loading.delete(r);
                 }
                 catch { /* no frame: leave it */ }
             }
@@ -245,8 +263,10 @@ export class Session {
         this.page = undefined;
         this.inflight = 0;
         this.pending.clear();
+        this.loading.clear();
         this.lastLines = [];
         this.hints.clear();
+        this.consentAsked.clear();
     }
     /**
      * Closes the browser and answers when it is gone: 'closed', or 'pending' if it had not exited when the time was up.

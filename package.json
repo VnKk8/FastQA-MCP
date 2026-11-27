@@ -26,7 +26,7 @@
     "demo": "node bench/demo-server.mjs",
     "test": "npm run build && npm run test:unit && npm run test:e2e",
     "test:unit": "node --test bench/unit.mjs bench/unit-review.mjs bench/unit-contract.mjs bench/unit-discovery.mjs",
-    "test:e2e": "node bench/e2e.mjs && node bench/export-check.mjs && node bench/qa-features.mjs && node bench/compat.mjs && node bench/observe.mjs && node bench/privacy.mjs && node bench/policy.mjs && node bench/safety.mjs && node bench/artifacts.mjs && node bench/review.mjs",
+    "test:e2e": "node bench/e2e.mjs && node bench/export-check.mjs && node bench/qa-features.mjs && node bench/compat.mjs && node bench/observe.mjs && node bench/privacy.mjs && node bench/policy.mjs && node bench/safety.mjs && node bench/artifacts.mjs && node bench/review.mjs && node bench/cookies.mjs",
     "perf": "npm run build && node bench/perf.mjs",
     "test:package": "npm run build && node bench/package-smoke.mjs",
     "test:env": "npm run build && node bench/cdp-tls.mjs",

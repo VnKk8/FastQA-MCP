@@ -33,7 +33,16 @@ check('the same eight tools in the same order', tools.map((t) => t.name).join(',
 for (const old of legacyTools) {
   const cur = tools.find((t) => t.name === old.name);
   const oldProps = old.inputSchema.properties ?? {}; const curProps = cur?.inputSchema.properties ?? {};
-  const same = (a, b) => JSON.stringify({ ...a, description: undefined }) === JSON.stringify({ ...b, description: undefined });
+  // "Still accepted with the same type": everything 0.3.2 declared is declared the same way now. Three things may differ,
+  // because none of them rejects an input that 0.3.2 accepted: descriptions, more allowed values in an enum (a new step
+  // kind), and more optional properties of an object.
+  const same = (a, b, key) => {
+    if (key === 'description') return true;
+    if (key === 'enum') return Array.isArray(a) && Array.isArray(b) && a.every((v) => b.includes(v));
+    if (Array.isArray(a)) return Array.isArray(b) && a.length === b.length && a.every((v, i) => same(v, b[i]));
+    if (a && typeof a === 'object') return !!b && typeof b === 'object' && Object.keys(a).every((k) => same(a[k], b[k], k)) && Object.keys(b).every((k) => k in a || k === 'description' || key === 'properties');
+    return a === b;
+  };
   const changed = Object.keys(oldProps).filter((k) => !curProps[k] || !same(oldProps[k], curProps[k]));
   check(`${old.name}: every 0.3.2 parameter keeps its name and type`, changed.length === 0, `changed or removed: ${changed.join(', ')}`);
   check(`${old.name}: no new required parameter`, JSON.stringify(cur?.inputSchema.required ?? []) === JSON.stringify(old.inputSchema.required ?? []), JSON.stringify(cur?.inputSchema.required));

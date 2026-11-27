@@ -18,6 +18,7 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 
 import { VERSION } from './version.js';
+import { COOKIE_CHOICES, type CookieChoice } from './cookies.js';
 const session = new Session();
 installServices();
 
@@ -57,6 +58,15 @@ function exclusive<A>(fn: (a: A) => Promise<Result>): (a: A) => Promise<Result> 
   };
 }
 
+/** FASTQA_COOKIES: what every open does with a cookie banner unless the call says otherwise. */
+const COOKIES_DEFAULT: CookieChoice | undefined = (() => {
+  const v = (process.env.FASTQA_COOKIES || '').trim().toLowerCase();
+  if (!v || v === 'keep') return undefined;
+  if ((COOKIE_CHOICES as readonly string[]).includes(v)) return v as CookieChoice;
+  console.error(`fastqa: FASTQA_COOKIES=${JSON.stringify(process.env.FASTQA_COOKIES)} is ignored. Use accept, reject or keep.`);
+  return undefined;
+})();
+
 const server = new McpServer({ name: 'fastqa', version: VERSION });
 
 server.registerTool('open', {
@@ -67,23 +77,27 @@ server.registerTool('open', {
     url: z.string().describe('URL to open'),
     fresh: z.boolean().optional().describe('New isolated context (clears cookies/storage). Default false.'),
     device: z.string().optional().describe('Emulate a device, e.g. "iPhone 13", "Pixel 7", "iPad Mini". "" = back to desktop.'),
+    cookies: z.enum(['accept', 'reject', 'keep']).optional().describe('Cookie banner: accept or reject it. keep (default) leaves it.'),
   },
-}, exclusive(async ({ url, fresh, device }: { url: string; fresh?: boolean; device?: string }) => {
+}, exclusive(async ({ url, fresh, device, cookies }: { url: string; fresh?: boolean; device?: string; cookies?: 'accept' | 'reject' | 'keep' }) => {
   await session.ensure(!!fresh, device);
   const t0 = Date.now();
   session.tape = [];
-  const b = await runBatch(session, [{ do: 'goto', value: url }], { kind: 'open', settleMs: 2000, onRecorded: (r) => { session.tape = [r]; } });
-  if (!b.ok) return text(b.lines[0] + qaTail(qualityOf(session.obs, b.requestsBefore)), structured(b, undefined));
+  const choice = cookies === 'keep' ? undefined : cookies ?? COOKIES_DEFAULT;
+  const steps = [{ do: 'goto', value: url }, ...(choice ? [{ do: 'cookies', value: choice }] : [])];
+  const b = await runBatch(session, steps, { kind: 'open', settleMs: 2000, onRecorded: (r) => { session.tape.push(r); } });
+  if (!b.ok) return text(b.lines[b.lines.length - 1] + qaTail(qualityOf(session.obs, b.requestsBefore)), structured(b, undefined));
   const snap = await session.snapshot();
   session.lastLines = snap.items.map((i) => i.line);
   const q = qualityOf(session.obs, b.requestsBefore);
-  return text(`${Session.render(snap)}\n(${Date.now() - t0}ms)${evidenceSummary()}${qaTail(q)}`, structured(b, q));
+  const banner = b.lines.slice(1).map((l) => `\n${l}`).join(''); // what the cookies step did, when one ran
+  return text(`${Session.render(snap)}${banner}\n(${Date.now() - t0}ms)${evidenceSummary()}${qaTail(q)}`, structured(b, q));
 }));
 
 const StepSchema = z.object({
   do: z.enum(STEP_KINDS),
   target: z.string().optional().describe('ref "e5", visible text/label like "Log in" or "Email", or a selector: "#id", "css=..", "testid=..". expect_request: "POST /api/orders" or "/regex/". expect_no_errors: optional text to ignore.'),
-  value: z.string().optional().describe('text to fill, key to press, option to select, url, expected text/url (use /regex/ for regex). {{name}} reads env FASTQA_VAR_name so secrets never pass through the model. expect_request: status "200"/"2xx"/"<400". expect_no_errors: "strict" also fails on 4xx. expect_accessible: lowest failing impact, default "serious".'),
+  value: z.string().optional().describe('text to fill, key to press, option to select, url, expected text/url (use /regex/ for regex). {{name}} reads env FASTQA_VAR_name so secrets never pass through the model. expect_request: status "200"/"2xx"/"<400". expect_no_errors: "strict" also fails on 4xx. expect_accessible: lowest failing impact, default "serious". cookies: "accept" or "reject".'),
   timeout: z.number().optional().describe('ms, default 5000'),
   frame: z.string().optional().describe('only search inside this iframe (title, name, id or src fragment). Usually not needed: targets are searched in the page, shadow DOM and all iframes.'),
 });

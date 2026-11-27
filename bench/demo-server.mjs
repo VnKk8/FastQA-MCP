@@ -1,5 +1,6 @@
 // Tiny demo shop for testing fastqa: login -> account page -> add products to the cart (async API) -> checkout.
 import http from 'node:http';
+import { cookiePage } from './cookie-pages.mjs';
 
 const page = (title, body) => `<!doctype html><html><head><meta charset="utf-8"><title>${title}</title>
 <style>body{font-family:sans-serif;max-width:720px;margin:40px auto}label{display:block;margin:8px 0}
@@ -206,6 +207,13 @@ export function start(port = 0) {
     const send = (code, type, data, delay = 0) => setTimeout(() => { res.writeHead(code, { 'content-type': type }); res.end(data); }, delay);
     if (faultApi(req, res, body)) return;
     const pathname = (req.url ?? '').split('?')[0];
+    if (pathname === '/cookies/slow-body') { // the document arrives in two parts: for 3 seconds it has a head and no body
+      res.writeHead(200, { 'content-type': 'text/html' });
+      res.write('<!doctype html><html><head><meta charset="utf-8"><title>Cookies reloaded</title></head>');
+      return void setTimeout(() => res.end('<body><h1>Reloaded</h1><p role="status">consent: accepted</p></body></html>'), 3000);
+    }
+    const cookieFixture = cookiePage(pathname);
+    if (cookieFixture) return send(200, 'text/html', cookieFixture);
     if (pathname === '/' || pathname === '/login') return send(200, 'text/html', login);
     if (pathname === '/account') return send(200, 'text/html', account);
     if (pathname === '/checkout') return send(200, 'text/html', checkout(srv.address().port));

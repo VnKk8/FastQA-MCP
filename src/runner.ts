@@ -1,9 +1,10 @@
 import { auditA11y } from './a11y.js';
 import { Session, DEFAULT_TIMEOUT, sleep, AmbiguousTargetError, warnLegacyTls, type Step, type RecordedStep } from './session.js';
 import { redactor } from './privacy/redact.js';
+import { dismissCookies, describeOutcome, COOKIE_CHOICES, COOKIE_WAIT_MS, COOKIE_RECHECK_MS, type CookieChoice } from './cookies.js';
 
 export const STEP_KINDS = [
-  'goto', 'click', 'dblclick', 'hover', 'fill', 'type', 'press', 'select', 'check', 'uncheck', 'wait',
+  'goto', 'click', 'dblclick', 'hover', 'fill', 'type', 'press', 'select', 'check', 'uncheck', 'wait', 'cookies',
   'expect_text', 'expect_no_text', 'expect_url', 'expect_title', 'expect_value',
   'expect_visible', 'expect_hidden', 'expect_enabled', 'expect_disabled', 'expect_count',
   'expect_request', 'expect_no_errors', 'expect_accessible',
@@ -51,6 +52,7 @@ export async function runStep(session: Session, s: Step, tmpl?: Step): Promise<S
   const timeout = s.timeout ?? DEFAULT_TIMEOUT;
   const label = labelOf(tmpl ?? s);
   let recorded: RecordedStep | undefined = { ...s };
+  let note = '';
   try {
     switch (s.do) {
       case 'goto': {
@@ -121,6 +123,19 @@ export async function runStep(session: Session, s: Step, tmpl?: Step): Promise<S
           await sleep(ms);
           recorded.code = `await page.waitForTimeout(${ms});`;
         }
+        break;
+      }
+      case 'cookies': {
+        // Cookie banner: click its accept / reject button. A page without a banner passes: the line says what happened.
+        const choice = need(s, 'value').toLowerCase() as CookieChoice;
+        if (!COOKIE_CHOICES.includes(choice)) throw new Error(`"cookies" needs value "accept" or "reject", got ${q(s.value)}`);
+        let origin = ''; try { origin = new URL(page.url()).origin; } catch { /* about:blank */ }
+        // A site gets the full wait for its banner once per browser context. Later pages of it get a short one: the answer is
+        // usually remembered, but a page can still show its banner a moment after loading.
+        const out = await dismissCookies(page, choice, s.timeout ?? (session.consentAsked.has(origin) ? COOKIE_RECHECK_MS : COOKIE_WAIT_MS), () => session.quietFor());
+        session.consentAsked.add(origin);
+        note = describeOutcome(out, choice);
+        recorded = { do: 'cookies', value: choice, code: `await fq.cookies(${q(choice)});` };
         break;
       }
       case 'expect_text': case 'expect_no_text': {
@@ -252,7 +267,7 @@ export async function runStep(session: Session, s: Step, tmpl?: Step): Promise<S
         throw new Error(`Unknown step "${s.do}". Valid: ${STEP_KINDS.join(', ')}`);
     }
     if (recorded && tmpl?.value !== undefined) recorded.value = tmpl.value;
-    return { ok: true, ms: Date.now() - t0, line: `✓ ${label} (${Date.now() - t0}ms)`, recorded };
+    return { ok: true, ms: Date.now() - t0, line: `✓ ${label}${note ? ' — ' + note : ''} (${Date.now() - t0}ms)`, recorded };
   } catch (e: any) {
     const msg = String(e?.message || e).split('\n')[0].replace(/^locator\.\w+: /, '');
     return { ok: false, ms: Date.now() - t0, line: `✗ ${label} — ${msg}` };
