@@ -2,15 +2,15 @@
 
 If you're new, start with the [README](../README.md).
 
-> **Which version does this describe?** This file describes the source tree it lives in. Everything marked **(unreleased)** is implemented and tested here but is **not in the published npm package yet** (npm `latest` is 0.3.2). To use it before a release, run from source: see [Develop](#develop). Sections without the mark apply to 0.3.2 as well.
+> **Which version does this describe?** fastqa-mcp 1.0. What is new since 0.3 is listed in the [changelog](../CHANGELOG.md); where the behaviour differs from 0.3, the text says so.
 
-fastqa is one MCP server for **Claude Code**, **OpenCode** or any other MCP client. It gives an agent fast, compact browser control with QA built in: batched actions, assertions, and, **(unreleased)** continuous observation that reports candidate findings even when no step asked for a check. It needs no model of its own, no hosted service and no database.
+fastqa is one MCP server for **Claude Code**, **OpenCode** or any other MCP client. It gives an agent fast, compact browser control with QA built in: batched actions, assertions, and continuous observation that reports candidate findings even when no step asked for a check. It needs no model of its own, no hosted service and no database.
 
 ## Measured performance
 
 Same journey on the bundled demo shop (login, add to cart, switch currency):
 
-| | @playwright/mcp 0.0.86 | fastqa 0.3.2 | fastqa, this source tree |
+| | @playwright/mcp 0.0.86 | fastqa 0.3.2 | fastqa 1.0 |
 |---|---|---|---|
 | Model turns (tool calls) | 10 | **2** | **2** |
 | Tokens returned to the model | ~1,270 | **~310** | ~330 |
@@ -25,7 +25,7 @@ How to read this:
 - Measured on one machine (Windows 11, Node 24, Chromium 143 headless) against a small local fixture. They are not universal numbers. Reproduce with `npm run bench` and `npm run perf`.
 - "Browser-side time" is the time spent inside tool calls. It is measured. A single run varies by a few tenths of a second; compare builds with the 30-sample row.
 - "End-to-end" adds an **assumed** 3 seconds per model turn. No live model was timed. Most of the difference comes from needing fewer turns, so real results depend on your model, client and site.
-- The observation layer added in this source tree changed the median and p95 browser-side time on this fixture by less than 1% and adds one line of text per clean result (`open` +11%, `act` +3% in characters). The tool definitions grew by about 420 tokens (+30%) because `evidence`, `act` and `flow` gained optional parameters. Server memory after the run was 124 MB against 115 MB.
+- The observation layer added in 1.0 changed the median and p95 browser-side time on this fixture by less than 1% and adds one line of text per clean result (`open` +11%, `act` +3% in characters). The tool definitions grew by about 420 tokens (+30%) because `evidence`, `act` and `flow` gained optional parameters. Server memory after the run was 124 MB against 115 MB.
 
 ## Why it's faster
 
@@ -84,18 +84,18 @@ claude mcp add fastqa -- node /abs/path/FastQA-MCP/dist/index.js
 
 ## Tools
 
-Eight tools. The set did not change; the parameters marked **(unreleased)** are optional additions.
+Eight tools, the same set as in 0.3. Version 1.0 added optional parameters only: `strict` and `scope` on `act`, `mode` on `flow`, and the views of `evidence`.
 
 | Tool | What it does |
 |---|---|
 | `open` | Opens a URL and returns a compact snapshot. Starts a new recording. `fresh: true` gives a new isolated context. `device: "iPhone 13"` emulates a phone. |
-| `act` | Runs a batch of steps and returns pass/fail per step plus the page diff. **(unreleased)** `strict: true` rejects ambiguous targets; `scope` labels the batch for expected-error policies. |
+| `act` | Runs a batch of steps and returns pass/fail per step plus the page diff. `strict: true` rejects ambiguous targets; `scope` labels the batch for expected-error policies. |
 | `snapshot` | `interactive` (default) or `full` (adds visible text), optionally scoped with `root=<css>`. |
 | `screenshot` | JPEG of the page or an element. Password fields and `privacy.maskSelectors` are masked. |
 | `audit` | Accessibility check (axe-core, WCAG 2.1 A/AA) on the page and its iframes. |
-| `evidence` | No arguments: JS errors, console errors and failed requests since the last call (0.3 behaviour). **(unreleased)** With `view`: read-only drill-down, see [Evidence views](#evidence-views-unreleased). |
-| `flow` | `start`, `save`, `run` (name or `*`, optional `dataset` CSV), `list`, `show`, `export`. **(unreleased)** `mode: "strict"`. |
-| `close` | Closes the browser. **(unreleased)** The session's evidence stays readable until the next `open`. |
+| `evidence` | No arguments: JS errors, console errors and failed requests since the last call (0.3 behaviour). With `view`: read-only drill-down, see [Evidence views](#evidence-views). |
+| `flow` | `start`, `save`, `run` (name or `*`, optional `dataset` CSV), `list`, `show`, `export`. `run` also takes `mode: "strict"`. |
+| `close` | Closes the browser. The session's evidence stays readable until the next `open`. |
 
 Step kinds: `goto click dblclick hover fill type press select check uncheck wait expect_text expect_no_text expect_url expect_title expect_value expect_visible expect_hidden expect_enabled expect_disabled expect_count expect_request expect_no_errors expect_accessible`.
 
@@ -117,7 +117,7 @@ Example `act`:
 ] }
 ```
 
-## Continuous QA (unreleased)
+## Continuous QA
 
 While steps run, fastqa watches the browser and applies deterministic rules. The result of `open`, `act` and `flow run` ends with a quality block. A clean batch costs one line:
 
@@ -192,7 +192,7 @@ Expected and suppressed findings are kept and stay visible in `evidence {view:"f
 |---|---|
 | `observe` (default) | Watches and reports. Never changes a pass/fail result. Metadata only. |
 | `strict` | As observe, and findings at or above `quality.failOnSeverity` (default `high`) fail the run. |
-| `discovery` | As observe, and collects the [observed route and endpoint graph](#discovery-unreleased). |
+| `discovery` | As observe, and collects the [observed route and endpoint graph](#discovery). |
 | `debug` | As observe, and turns on payload capture, but only if `capture.allowedOrigins` is set. |
 | `off` | No observation summary at all: the exact 0.3 output. |
 
@@ -202,7 +202,7 @@ Set it with `quality.mode` in the config, `FASTQA_QUALITY`, `--mode=` on the CLI
 
 **Strict in replay (CLI and `flow run`).** The outcome is final. Before deciding, fastqa waits for the requests that were open when the last step finished, for at most `quality.finalizeTimeoutMs` (default 3 s). This is a bounded wait for those requests, not a network-idle wait: traffic that starts later, such as polling, is neither waited for nor judged. If one of those requests is still open at the deadline, coverage is partial and `quality.onIncomplete` decides: `fail` (default) or `ignore`.
 
-## Evidence views (unreleased)
+## Evidence views
 
 `evidence` without arguments behaves as in 0.3. With `view` it is a read-only drill-down. Nothing is consumed, lists are paged (`limit`, `cursor`), and payloads only appear with `details: true`.
 
@@ -235,7 +235,7 @@ F-001 HIGH NET-5XX · candidate · confidence medium · ×1
   request R-3 POST /api/notifications?status=…&delay=… → 500 · fetch · 76ms · P-1 · A-2 click "Place order" (inferred) — request started during the action
 ```
 
-## Configuration file (unreleased)
+## Configuration file
 
 Optional: `.fastqa/config.json` (inside `FASTQA_DIR`). A full example is in [config.example.json](config.example.json). The file is validated strictly: an unknown key or an invalid value is an error before the browser starts, never a silent fallback. Check it with `npx fastqa-mcp config`.
 
@@ -268,7 +268,7 @@ Optional: `.fastqa/config.json` (inside `FASTQA_DIR`). A full example is in [con
 
 Precedence: defaults, then the config file, then explicit run options (`--mode`, `mode`, `FASTQA_QUALITY`). Hard caps and the deny rule `FASTQA_CAPTURE=off` always win. The page under test can never supply configuration, and nothing in the file is executed.
 
-## Privacy and capture (unreleased)
+## Privacy and capture
 
 Defaults are metadata only: method, sanitized URL, status, timing. No bodies, no headers.
 
@@ -288,7 +288,7 @@ What this does not guarantee:
 - Screenshots can show anything on the page except masked elements. Protect `.fastqa/` and do not commit it.
 - `FASTQA_CDP_URL` attaches to a browser you are already logged into. Use it only with test profiles.
 
-## Strict locators and refs (unreleased)
+## Strict locators and refs
 
 By default a target that matches several elements uses the first visible one (0.3 behaviour). With `strict: true` on `act`, or `locator.strict` in the config, the step fails instead and lists refs to choose from:
 
@@ -298,10 +298,10 @@ By default a target that matches several elements uses the first visible one (0.
 
 In strict mode a ref that was issued before the page navigated is rejected as stale. A failed step is never retried on a different element.
 
-## Sessions, isolation and concurrency (unreleased)
+## Sessions, isolation and concurrency
 
 - One browser context is one session with its own id, events and findings. `open` with `fresh: true` starts a new one. Replay always uses a new isolated context.
-- Tool calls to one server are queued: two concurrent calls never interleave their steps.
+- Tool calls to one server are queued: two concurrent calls never interleave their steps, and calls run in the order they arrive, also when a client sends several at once. A call cancelled while it waits never runs. At most 1,000 calls wait; further ones are refused with an error.
 - For parallel work, run one server process per worker. Workers can share a `FASTQA_DIR`: run ids are unique, bundles never collide, and shared files are replaced atomically.
 - Buffers are bounded. When a budget is exceeded the oldest events are dropped, counted and reported; a reference to a dropped event says "evicted".
 
@@ -328,7 +328,7 @@ Everything goes in `.fastqa/` (or `FASTQA_DIR`):
     └── evidence/<id>/     finding.md (candidate bug draft) and network.json
 ```
 
-Session bundles **(unreleased)** are written when `artifacts.enabled` is set, with `--bundle` on the CLI, or on request with `evidence {report:true}`. They hold sanitized data, relative paths only, and nothing is uploaded anywhere. Retention removes bundles beyond `artifacts.maxRuns` or older than `artifacts.retentionDays`; it only ever removes directories named like a fastqa run id.
+Session bundles are written when `artifacts.enabled` is set, with `--bundle` on the CLI, or on request with `evidence {report:true}`. They hold sanitized data, relative paths only, and nothing is uploaded anywhere. Retention removes bundles beyond `artifacts.maxRuns` or older than `artifacts.retentionDays`; it only ever removes directories named like a fastqa run id.
 
 Keep `.fastqa/` out of version control, or at least `.fastqa/sessions/`, `.fastqa/reports/` and `.fastqa/artifacts/`: they hold local run data. Flows and `config.json` are the parts worth committing.
 
@@ -340,16 +340,16 @@ Flow files written by 0.3 replay unchanged. New files carry `"schema": 2`; nothi
 npx fastqa-mcp run '*'                         # all flows in .fastqa/flows
 npx fastqa-mcp run checkout --var=password=$PW
 npx fastqa-mcp run login --data=users          # once per row of .fastqa/data/users.csv
-npx fastqa-mcp run checkout --mode=strict      # (unreleased) QA findings at or above failOnSeverity fail the run
-npx fastqa-mcp run checkout --bundle           # (unreleased) leave a session bundle
-npx fastqa-mcp config                          # (unreleased) validate and print the effective configuration
+npx fastqa-mcp run checkout --mode=strict      # QA findings at or above failOnSeverity fail the run
+npx fastqa-mcp run checkout --bundle           # leave a session bundle
+npx fastqa-mcp config                          # validate and print the effective configuration
 ```
 
 Each run writes `.fastqa/reports/<time>.html` and `.junit.xml`, plus `latest.html` and `latest.junit.xml`. The exit code is 0 when every flow passed, 1 when one failed, 2 for a usage or configuration error. An option `run` does not know is a usage error (0.3 ignored it), so a typo such as `--mode=strcit` cannot silently run in the default mode.
 
-**(unreleased)** Reports show steps and assertions separately from QA findings. In observe mode a finding never fails a test case; findings appear in `<system-out>`. In strict mode a policy failure is its own JUnit failure with `type="fastqa.policy"`.
+Reports show steps and assertions separately from QA findings. In observe mode a finding never fails a test case; findings appear in `<system-out>`. In strict mode a policy failure is its own JUnit failure with `type="fastqa.policy"`.
 
-### Response-time baselines (unreleased)
+### Response-time baselines
 
 ```bash
 npx fastqa-mcp run checkout --baseline=record --repeat=5   # needs at least 5 samples per endpoint
@@ -360,13 +360,13 @@ A baseline belongs to one environment. Compare runs on the same machine, browser
 
 ## Playwright export
 
-`flow export` writes `.fastqa/tests/<name>.spec.ts`. **(unreleased)** `expect_request`, `expect_no_errors` and `expect_accessible` are exported as executable code through a small helper generated into the spec, with the same scope (everything since the test started) and polling as fastqa replay. In 0.3.2 they were comments.
+`flow export` writes `.fastqa/tests/<name>.spec.ts`. `expect_request`, `expect_no_errors` and `expect_accessible` are exported as executable code through a small helper generated into the spec, with the same scope (everything since the test started) and polling as fastqa replay. In 0.3.2 they were comments.
 
 - `expect_accessible` needs `axe-core` installed next to `@playwright/test`; without it the step fails with a clear message.
 - A step that cannot be exported faithfully (currently `expect_hidden` with a semantic target) becomes a `// fastqa:unsupported` line and is listed in the tool result and in `<name>.parity.json`. With `mode: "strict"` the export is refused instead.
 - Automatic QA findings and strict policy are not part of an exported spec. Use fastqa replay for those.
 
-## Discovery (unreleased)
+## Discovery
 
 With `quality.mode: "discovery"` fastqa keeps a bounded graph of what it observed: page routes, first-party endpoints (method + normalized path, statuses, counts), and edges between them with a confidence and evidence ids. Repeating a journey raises counts; it does not duplicate nodes.
 
@@ -376,7 +376,7 @@ With `quality.mode: "discovery"` fastqa keeps a bounded graph of what it observe
 - Requests without a clear action are marked background, not attributed.
 - It lists observed activity only. It is not a coverage measure and does not crawl: the agent decides where to go.
 
-## Contracts (unreleased)
+## Contracts
 
 `quality.contracts` points at local OpenAPI JSON files, resolved inside `.fastqa/` or the project root.
 
@@ -398,10 +398,10 @@ With `quality.mode: "discovery"` fastqa keeps a bounded graph of what it observe
 | `FASTQA_MAX_LINES` | `250` | Snapshot line cap. |
 | `FASTQA_DIR` | `./.fastqa` | Where flows, reports, config and artifacts live. |
 | `FASTQA_VAR_<name>` | – | Value for `{{name}}` placeholders. |
-| `FASTQA_QUALITY` **(unreleased)** | – | `observe`, `strict`, `discovery`, `debug` or `off`. Overrides `quality.mode`. |
-| `FASTQA_CAPTURE` **(unreleased)** | – | `off` forbids payload capture whatever the config says. |
-| `FASTQA_IGNORE_HTTPS_ERRORS` **(unreleased)** | – | `true` / `false`. Overrides the TLS default and the config. |
-| `FASTQA_STRUCTURED` **(unreleased)** | `false` | Also return `structuredContent`. |
+| `FASTQA_QUALITY` | – | `observe`, `strict`, `discovery`, `debug` or `off`. Overrides `quality.mode`. |
+| `FASTQA_CAPTURE` | – | `off` forbids payload capture whatever the config says. |
+| `FASTQA_IGNORE_HTTPS_ERRORS` | – | `true` / `false`. Overrides the TLS default and the config. |
+| `FASTQA_STRUCTURED` | `false` | Also return `structuredContent`. |
 
 ## Agent instructions (paste into CLAUDE.md / AGENTS.md)
 ```
@@ -443,7 +443,7 @@ npm run test:env      # attach over CDP to a running Chromium; TLS defaults with
 npm run demo      # demo shop on http://127.0.0.1:4321 (fault scenarios: /orders?notify=500 and others, see bench/demo-server.mjs)
 ```
 
-Test suites in `bench/`: `unit*.mjs` (pure modules), `e2e`, `export-check`, `qa-features` (0.3 suites, unchanged), `compat` (byte-for-byte comparison with 0.3.2 output), `observe`, `privacy`, `policy`, `safety`, `artifacts`, `review` and `unit-review` (regressions for the findings of two independent reviews).
+Test suites in `bench/`: `unit*.mjs` (pure modules), `e2e`, `export-check`, `qa-features` (0.3 suites, unchanged), `compat` (comparison with the recorded 0.3.2 output), `observe`, `privacy`, `policy`, `safety`, `artifacts`, `review` and `unit-review` (regressions for the findings of two independent reviews).
 
 CI (`.github/workflows/ci.yml`) runs `npm test` on Node 20, 22 and 24 for every push and pull request. It also fails if the committed `dist/` doesn't match the source, so run `npm run build` and commit `dist/` with source changes.
 

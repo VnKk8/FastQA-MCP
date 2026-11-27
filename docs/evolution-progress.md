@@ -1,7 +1,7 @@
 # FastQA-MCP evolution: execution ledger
 
 Plan: `docs/FASTQA-IMPLEMENTATION-PLAN.md` (revision 3). Roadmap: `docs/FASTQA-ROADMAP.md`. Baseline: `docs/evolution-baseline.md`.
-Branch `evolution/v1-roadmap`, cut from `41815d3` (0.3.2). Local commits only. **Nothing is pushed, tagged, published or released.**
+Branch `evolution/v1-roadmap`, cut from `41815d3` (0.3.2), pushed on 2026-11-27 as pull request 1 of `VnKk8/FastQA-MCP`. **Nothing is tagged, published or released**: the release is the maintainer's step, see "Pull request, CI on Linux and release as 1.0.0".
 
 If context is lost: re-read the two plans and this file, then continue at the first item that is not `verified`.
 
@@ -41,11 +41,11 @@ If context is lost: re-read the two plans and this file, then continue at the fi
 
 ## Test results (final run)
 
-`npm test` on Windows 11, Node v24.11.1, Chromium 143 headless: exit code 0.
+`npm test` on Windows 11, Node v24.11.1, Chromium 143 headless: exit code 0. The same command passes in CI on Ubuntu 24.04 with Node 20, 22 and 24 (commit `b174bd5`; the runs before it are described under "Pull request, CI on Linux and release as 1.0.0").
 
 | Suite | Result |
 |---|---|
-| Unit: `bench/unit.mjs`, `unit-review.mjs`, `unit-contract.mjs`, `unit-discovery.mjs` | 87 of 87 |
+| Unit: `bench/unit.mjs`, `unit-review.mjs`, `unit-contract.mjs`, `unit-discovery.mjs` | 90 of 90 |
 | `bench/e2e.mjs` (0.3 suite, unchanged assertions) | ALL CHECKS PASSED |
 | `bench/export-check.mjs` (0.3 suite) | exported spec: 1 passed |
 | `bench/qa-features.mjs` (0.3 suite) | ALL QA FEATURE CHECKS PASSED |
@@ -53,10 +53,10 @@ If context is lost: re-read the two plans and this file, then continue at the fi
 | `bench/observe.mjs` | 38 of 38 |
 | `bench/privacy.mjs` | 37 of 37 |
 | `bench/policy.mjs` | 58 of 58 |
-| `bench/safety.mjs` | 34 of 34 |
+| `bench/safety.mjs` | 40 of 40 |
 | `bench/artifacts.mjs` | 46 of 46 |
 | `bench/review.mjs` (regressions for the independent review) | 24 of 24 |
-| `bench/package-smoke.mjs` (`npm run test:package`, not part of `npm test`) | 28 of 28 |
+| `bench/package-smoke.mjs` (`npm run test:package`, not part of `npm test`) | 29 of 29 |
 | `bench/cdp-tls.mjs` (`npm run test:env`, not part of `npm test`: attaches to a running Chromium, and makes a throwaway certificate with `openssl`) | 15 of 15 |
 
 Test order was not always "red first". `bench/observe.mjs` was written before the implementation and failed 27 of 38 checks against the 0.3.2 build. `bench/unit-review.mjs` (20 of 20 failing first) and `bench/review.mjs` (18 of 24 failing against the pre-fix build) were written before the review fixes. `bench/unit.mjs`, `policy`, `privacy`, `safety` and `artifacts` were written after the code they cover; they found the defects listed below, which were then fixed.
@@ -89,7 +89,7 @@ Same harness, same machine, same fixture (`node bench/perf.mjs --samples=30 --re
 Notes:
 
 - **Tool schemas grew by about 420 tokens.** The plan asks to measure this, not to gate it. `evidence` gained 11 optional parameters, `act` two, `flow` one, and two descriptions gained a sentence. Descriptions were trimmed once (from +42% to +30%) and two filters the plan did not ask for were removed. Clients that resend tool definitions every turn pay this each turn.
-- These are the numbers of the final code, measured after the review fix pass with nothing else running.
+- These numbers were measured after the review fix pass with nothing else running. The arrival-order queue (see "Pull request, CI on Linux and release as 1.0.0") was added later; a re-run of the same command after it gave an `open` median of 200 ms, an `act` median of 1,285 ms, a replay median of 1,405 ms (p95 1,439 ms), the same response sizes and 123.8 MB, which is the same within noise.
 - **Replay outliers.** Some earlier runs showed one or two replays of about 2.0 s among 30. Interleaved runs of the committed 0.3.2 build and the new build showed the same kind of outlier in 0.3.2 (max 1,699 ms) and none in the new build (max 1,447 ms and 1,426 ms), so it is machine noise, not a regression. The outliers appeared while review agents were using the machine.
 - **CPU time** was not measured (no dependency-free way for a child process on Windows).
 - `npm run bench` (one run): `@playwright/mcp` 10 calls, 3,154 ms; fastqa 2 calls, 2,435 ms; replay 1,402 ms. The end-to-end estimates (33.2 s and 8.4 s) assume 3 s per model turn and are not measurements of a model.
@@ -100,24 +100,47 @@ Notes:
 |---|---|
 | All unit, integration, MCP stdio, replay, export, CLI, reporting, privacy, resource and isolation tests | pass (table above) |
 | The eight tools, legacy inputs and outputs, flows, flags, assertions | pass: `compat.mjs` requires output identical to 0.3.2 apart from the `QA:` block |
-| Package contents and executable | pass: tarball has 28 files (86.9 kB packed, 287 kB unpacked; 0.3.2 had 10 files, 26.5 kB), only `dist/`, `README.md`, `LICENSE`, `package.json`; installed into an empty project, `--version`, `--help`, `config`, MCP server and CLI replay work |
-| Tracked `dist/` matches the source | pass locally: `npm run build` leaves no diff after commit |
+| Package contents and executable | pass: tarball has 29 files (87.8 kB packed, 290 kB unpacked; 0.3.2 had 10 files, 26.5 kB), only `dist/`, `README.md`, `LICENSE`, `package.json`; installed into an empty project, `--version`, `--help`, `config`, MCP server and CLI replay work |
+| Tracked `dist/` matches the source | pass locally (`npm run build` leaves no diff after commit) and in CI (`git diff --exit-code -- dist`) |
 | MCP client: OpenCode | **pass, real client.** OpenCode 1.19.0, `opencode mcp list` reports `fastqa connected`; `opencode run` with the free model `opencode/big-pickle` called `fastqa_open`, `fastqa_act`, `fastqa_evidence`, `fastqa_flow` (save, run) and `fastqa_close` against the local build and reported the QA line and finding. Transcript: `docs/baseline/opencode-smoke.txt`. Edit, bash and webfetch were denied in that temporary project |
 | MCP client: a second one | **not verified.** Claude Code CLI 2.1.302 found the server from a temporary `.mcp.json` but showed "Pending approval". Approving a project server is the user's decision, so it was not approved. The official MCP SDK stdio client is the second client actually exercised (every e2e suite) |
 | Performance comparison | pass (table above) |
 | Secret handling, bounded stores, artifact cleanup, path safety | pass after one fix pass; 1 Critical and 16 Important review findings fixed and covered by tests, see "Independent review" |
-| Docs: README, reference, config example, CLI usage, changelog, migration notes, benchmark method | done; unreleased features are marked as such |
+| Docs: README, reference, config example, CLI usage, changelog, migration notes, benchmark method | done; they describe 1.0.0 (the "unreleased" marks were removed when the maintainer decided on the version) |
 
-**Readiness statement.** The implementation is complete against the plan and verified on one machine. I do not claim v1.0 readiness for release: the items under "Not verified" are open, and the version and release are the maintainer's decision.
+**Readiness statement.** The implementation is complete against the plan. It was verified on Windows (Node 24) and, through the pull request's CI, on Ubuntu 24.04 with Node 20, 22 and 24. On 2026-11-27 the maintainer decided to release it as 1.0.0. The items under "Not verified" remain open and are stated as limits.
 
 ## Verified late
 
 Three items were first listed as not verified and then tested: attaching to a running Chromium over CDP with a tab fastqa does not drive, HTTPS with an invalid certificate (accepted with a warning without a config file, rejected with a hint once a config file exists, both overrides), and the age rule of bundle retention. See `bench/cdp-tls.mjs` and `bench/safety.mjs`.
 
+## Pull request, CI on Linux and release as 1.0.0
+
+The branch was pushed on 2026-11-27 and opened as pull request 1. CI runs `npm test` on Ubuntu 24.04 with Node 20, 22 and 24 and checks that the committed `dist/` matches the build. It was the first run of this work on Linux, and it took four runs to get green:
+
+| Run | Commit | Node 20 | Node 22 | Node 24 | What failed |
+|---|---|---|---|---|---|
+| 1 | `e048579` | fail | fail | fail | `compat`: the 0.3.2 baseline was recorded on Windows and contains `\` in paths below the data directory, so no Linux output could match it |
+| 2 | `5f8c730` | fail | pass | pass | `artifacts`: "polling is mostly background" got 7 of 15 on a slower runner |
+| 3 | `5ce122e` | pass | pass | fail | `safety`: a snapshot sent after two `act` calls ran before them |
+| 4 | `b174bd5` | pass | pass | pass | nothing |
+
+What each failure was, and what was done:
+
+- **Run 1, a test defect.** The comparison now brings paths below `<FASTQA_DIR>` to forward slashes on both sides (`slashes` in `bench/capture-baseline.mjs`, unit-tested). The recorded baseline file is unchanged.
+- **Run 2, a marginal test.** The first four polls of a page are attributed to the nearest action by design (ruling 3), so a 900 ms window measured mostly warm-up: 9 of 17 here, 7 of 15 on the runner, against a bar of one half. The window is now 2.5 s (33 of 38 here) and the bar is unchanged (ruling 28).
+- **Run 3, a product defect.** When several tool calls were read at once, the SDK's asynchronous argument validation let a call with a small schema run ahead of earlier ones. Reproduced deterministically by writing three requests in one write: answered in the order 13, 11, 12, and the snapshot saw the value from before both batches. Fixed in `src/ordering.ts` (ruling 30). Regression tests: `safety.mjs` section 2b (4 of 40 checks failed on the build before the fix, all pass after) and a unit test of the queue.
+
+Job logs need a GitHub sign-in, so from run 2 on the failures were read from annotations that the CI step now writes (`bench/ci-annotate.mjs`, ruling 29).
+
+Two of the three failures were timing-dependent and showed on one Node version only, in different runs. One green run of three jobs does not prove the suite is free of such tests; the check runs of later commits on the pull request are the continuing evidence.
+
+**Release as 1.0.0.** Decided by the maintainer on 2026-11-27. The docs and the changelog describe 1.0.0. `package.json` stays at 0.3.2 on the branch because the release workflow sets the version (ruling 26). To publish: add the label `release:major` to the pull request before merging it, or merge it and run the "Release" workflow by hand with the exact version `1.0.0`. Nothing was tagged or published from this work.
+
 ## Not verified
 
-- **Node 20 and 22, and Linux.** All tests ran on Node 24.11.1 on Windows. The CI matrix (Node 20/22/24 on Ubuntu) has not run because nothing was pushed. The code compiles against `lib: ES2022`, so newer library APIs would not compile, but that is not a test run.
-- **Timing-sensitive tests on slow CI runners.** Several scenarios depend on delays (a 2.2 s response crossing a 1.5 s settle, polling every 150 to 250 ms). They have margins of several hundred milliseconds and passed repeatedly here; a slow shared runner could still make them flaky.
+- **Timing-sensitive tests on slow CI runners.** Several scenarios depend on delays (a 2.2 s response crossing a 1.5 s settle, polling every 150 to 250 ms). One of them did fail on a CI runner and was fixed (see the next section). The others have margins of several hundred milliseconds and passed on every CI run so far; a slow shared runner could still make one of them flaky.
+- **macOS.** No test ran there.
 - **A second real MCP client** (see the gate above).
 - **Symlink escape** for contract spec paths: implemented (realpath containment) but not tested; creating symlinks needs elevation on this machine.
 - **Service workers, WebSockets, cross-browser.** Out of scope and documented as limits.
@@ -162,10 +185,10 @@ Not fixed, by decision. None is a regression against 0.3.2.
 ## Changed and new files
 
 - Review regressions: `bench/unit-review.mjs`, `bench/review.mjs`.
-- New source: `src/config.ts`, `src/dirs.ts`, `src/exec.ts`, `src/services.ts`, `src/version.ts`, `src/observation/{types,store,observer}.ts`, `src/correlation/actions.ts`,
+- New source: `src/config.ts`, `src/dirs.ts`, `src/exec.ts`, `src/ordering.ts`, `src/services.ts`, `src/version.ts`, `src/observation/{types,store,observer}.ts`, `src/correlation/actions.ts`,
   `src/quality/{engine,summary,baseline}.ts`, `src/privacy/redact.ts`, `src/evidence/{query,bundle}.ts`, `src/discovery/graph.ts`, `src/contract/openapi.ts`, `src/util/paths.ts`.
 - Changed source: `src/session.ts`, `src/runner.ts`, `src/flows.ts`, `src/index.ts`, `src/report.ts`. Unchanged: `src/snapshot.ts`, `src/a11y.ts`.
-- Tests and tools in `bench/`: `lib`, `unit`, `unit-contract`, `unit-discovery`, `compat`, `observe`, `privacy`, `policy`, `safety`, `artifacts`, `package-smoke`, `perf`, `capture-baseline`, fixtures in `demo-server.mjs`, `fixtures/`.
+- Tests and tools in `bench/`: `lib`, `unit`, `unit-contract`, `unit-discovery`, `compat`, `observe`, `privacy`, `policy`, `safety`, `artifacts`, `package-smoke`, `perf`, `capture-baseline`, `ci-annotate`, fixtures in `demo-server.mjs`, `fixtures/`.
 - Docs: `README.md`, `docs/REFERENCE.md`, `docs/config.example.json`, `CHANGELOG.md`, this file, `docs/evolution-baseline.md`, `docs/baseline/`.
 - `package.json`: `ajv` declared as a direct dependency (it was already installed through the MCP SDK); scripts `test`, `test:unit`, `test:e2e`, `test:package`, `perf`.
 
@@ -191,7 +214,7 @@ Decisions taken where the plan left a choice or reality differed. Each has its c
 14. **A server error is reported once.** `CONTRACT-STATUS` is not raised for 5xx responses; `NET-5XX` already covers them. Cost if wrong: an API whose contract documents a 5xx gets no contract check for it.
 15. **Baselines are keyed by method and normalized path, without the origin**, because test environments change host and port. Cost if wrong: two first-party origins that share a path share a baseline.
 16. **Tool schema size is reported, not gated.** See the performance notes. Cost if wrong: about 420 more tokens per turn in clients that resend tool definitions.
-17. **The README describes this source tree and marks unreleased sections.** npm still serves 0.3.2. Cost if wrong: a reader of the GitHub README may expect an unreleased feature in the npm package; the version note at the top says otherwise.
+17. **The README and reference describe 1.0.0.** They marked the new sections "(unreleased)" until the maintainer decided on the version (2026-11-27); the marks were then removed and the benchmark table re-measured on the current build. Cost if wrong: between merging the pull request and the npm publish, the GitHub README describes features that npm `latest` (0.3.2) does not have yet.
 18. **Session bundles for flow runs are written by the run, interactive ones at session end** (close or fresh context) when `artifacts.enabled`. Observations are streamed to disk during the session; the other files and the manifest are written at the end. Cost if wrong: a crashed interactive session leaves `observations.jsonl` without `summary.json`; retention removes such a directory after a day.
 
 19. **Two kinds of known secrets.** A value the user supplies through `{{name}}` is shown as that placeholder, also in flows and specs. A value seen in the application under test is shown as `•••` and never rewrites a flow or a spec. Cost if wrong: a secret that appears in a recorded `goto` URL of a flow stays in the flow file, as in 0.3.
@@ -201,6 +224,11 @@ Decisions taken where the plan left a choice or reality differed. Each has its c
 23. **A recurring finding is listed again** and counts for the batch policy in strict mode. Cost if wrong: a failure that repeats in every batch is listed in every result (one line each time).
 24. **`run` rejects unknown options** (exit 2), where 0.3 ignored them. A typo in `--mode=strict` must not silently run in observe mode. Cost if wrong: a script that passed an unsupported flag to 0.3 now stops.
 25. **Reports and failure screenshots are pruned** to the newest 200 each by default. The plan asks for bounded artifacts; 0.3 kept everything. Cost if wrong: a long-lived workspace loses reports older than the newest 200 unless `artifacts.maxReports` is raised.
+26. **`package.json` stays at 0.3.2 on the branch.** The release workflow sets the version (`npm version`), commits and tags it. Writing 1.0.0 by hand would make a `release:major` label publish 2.0.0, and an exact `1.0.0` input fail as "version not changed". Cost if wrong: a build from this branch reports 0.3.2 until the workflow has run.
+27. **The changelog names the public interface** that semantic versioning applies to from 1.0.0: the eight tools and their parameters, the flow file format, the CLI commands and exit codes, and `.fastqa/config.json`. Cost if wrong: the maintainer may want a wider or narrower promise; it is one paragraph in `CHANGELOG.md`.
+28. **The polling check got a longer window, not a lower bar.** The discovery check "polling is mostly background" failed on one CI runner (7 of 15). The attribution rule was left as it is (ruling 3), the threshold stayed at one half, and the scenario now waits 2.5 s instead of 0.9 s so the steady state decides (33 of 38 here). Cost if wrong: in a session shorter than about a second, the first four polls of a page are attributed to the nearest action as `inferred`; that is the documented behaviour, not hidden by the test.
+29. **CI lists failed checks as annotations.** The test step writes its output to a file and `bench/ci-annotate.mjs` turns failures into annotations on the pull request. Job logs need a GitHub sign-in; annotations do not. Cost if wrong: a failing run shows up to ten annotations; expected failures quoted inside passing checks are filtered out, and a new output format could slip past that filter.
+30. **Tool calls run in arrival order.** Calls were already queued, but when several were read at once the SDK's asynchronous argument validation let a call with a small schema overtake earlier ones. A queue on the transport (`src/ordering.ts`) now hands calls to the server one at a time. A call cancelled while it waits never runs; at most 1,000 wait. Cost if wrong: a client that sends independent calls in parallel gets them answered strictly one after another (they could not overlap before either), and a tool call that never answers blocks the calls behind it, as before.
 
 ## Blockers
 

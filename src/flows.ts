@@ -17,7 +17,7 @@ const flowPath = (name: string) => path.join(FLOW_DIR(), 'flows', `${safe(name)}
 export interface Flow {
   name: string;
   created: string;
-  /** 2 = written by 0.4+. Files without it (0.3) replay unchanged. */
+  /** 2 = written by 1.0 and later. Files without it (0.3) replay unchanged. */
   schema?: number;
   steps: RecordedStep[];
 }

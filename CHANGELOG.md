@@ -2,9 +2,11 @@
 
 All notable changes to `fastqa-mcp`. Versions follow [semantic versioning](https://semver.org/).
 
-## Unreleased
+## 1.0.0 (2026-11-27)
 
-Not on npm yet. Implemented and tested on the `evolution/v1-roadmap` branch; see `docs/evolution-progress.md` for what was verified and how. The version number is the maintainer's decision at release time.
+First stable release. It adds continuous QA: FastQA observes the browser while steps run and reports what it noticed, without being asked. Everything from 0.3 keeps working; read "Compatibility and migration" below before upgrading a pipeline.
+
+From this version on, the public interface is the eight tools and their parameters, the flow file format, the CLI commands and exit codes, and `.fastqa/config.json`. A breaking change to any of them needs a new major version. How this release was verified is in `docs/evolution-progress.md`.
 
 ### Added
 
@@ -27,7 +29,7 @@ Not on npm yet. Implemented and tested on the `evolution/v1-roadmap` branch; see
 - **Reports** show steps and assertions separately from QA findings. JUnit keeps its structure; findings go to `<system-out>`, and a strict policy failure is a failure of type `fastqa.policy`.
 - **Privacy.** Network URLs in every output lose credentials, fragments and query values (`?token=•••&page=…`). Known secret values are replaced wherever they appear, including page text. Screenshots mask password fields.
 - **One step executor** for MCP and CLI replay, and browser listeners bound once per context, so the first requests of popups are observed and nothing is registered twice.
-- Tool calls to one server are queued instead of running concurrently against the same page.
+- Tool calls to one server are queued instead of running concurrently against the same page, and they run in the order they arrive. A call that is cancelled while it waits never runs.
 - Report and flow files are written atomically; parallel runs into one directory no longer overwrite each other.
 - `npm run demo` works on Windows.
 

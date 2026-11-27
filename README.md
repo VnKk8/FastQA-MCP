@@ -11,13 +11,13 @@
 [![QA friendly](.github/badges/qa-friendly.svg)](#what-fastqa-can-test)
 [![license: MIT](https://img.shields.io/npm/l/fastqa-mcp.svg)](LICENSE)
 
-[Quick start](#quick-start) · [How it works](#how-it-works) · [Continuous QA](#continuous-qa-unreleased) · [Benchmarks](#speed-by-design) · [CI](#from-ai-exploration-to-deterministic-ci) · [Reference](docs/REFERENCE.md)
+[Quick start](#quick-start) · [How it works](#how-it-works) · [Continuous QA](#continuous-qa) · [Benchmarks](#speed-by-design) · [CI](#from-ai-exploration-to-deterministic-ci) · [Reference](docs/REFERENCE.md)
 
 </div>
 
 ---
 
-> **Version note.** The npm package (`fastqa-mcp@0.3.2`) has batched actions, assertions, network and error evidence, flows, replay and reports. The sections marked **(unreleased)** describe continuous QA findings, evidence views, strict mode, session bundles, discovery and contract checks. They are implemented and tested in this source tree and are **not on npm yet**. To use them now, [run from source](#develop-and-contribute).
+> **New in 1.0.** Continuous QA findings, evidence views, strict mode, session bundles, discovery and contract checks. The eight tools, saved flows and CLI exit codes work as they did in 0.3. Upgrading? Read the [changelog](CHANGELOG.md) for what changes in the output.
 
 ## Browser automation with a QA mindset
 
@@ -38,7 +38,7 @@ FastQA does not need its own LLM, cloud service or database. Bring any compatibl
 
 A test places an order. The page says "Thank you for your order". Behind it, a notification call fails and the UI never looks at the response.
 
-A UI-only assertion passes. FastQA records the failed request, and with the unreleased observation layer it tells the agent without being asked. This is real output from the bundled demo shop:
+A UI-only assertion passes. FastQA records the failed request and tells the agent without being asked. This is real output from the bundled demo shop:
 
 ```text
 PASSED 2/2 steps in 343ms
@@ -55,7 +55,7 @@ QA: 1 new candidate finding (highest HIGH) · 2 requests observed
 
 The steps still pass: the finding does not change them. It names the action that started the request and says how sure that link is (`inferred` means timing, not proof of cause). The failed request is evidence to investigate, not proof that the order failed.
 
-With 0.3.2 you get the same facts by asking: add an `expect_no_errors` step, or call `evidence`.
+To make such a failure fail the test, assert it: add an `expect_no_errors` or `expect_request` step, or run in strict mode.
 
 > **Every interaction is a testing opportunity. Every observation is evidence. Every unexpected behaviour is a potential discovery.**
 
@@ -91,7 +91,7 @@ Add the server to `opencode.json` (merge it into your existing configuration):
 }
 ```
 
-Restart the client. For a visible browser set `FASTQA_HEADED=true`. For reproducible CI, pin the version you validated, such as `fastqa-mcp@0.3.2`.
+Restart the client. For a visible browser set `FASTQA_HEADED=true`. For reproducible CI, pin the version you validated, such as `fastqa-mcp@1.0.0`.
 
 ### Other MCP clients
 
@@ -154,7 +154,7 @@ The agent owns the reasoning. FastQA owns the execution. Keeping those apart let
 | `snapshot` | Inspect interactive elements or the fuller visible page state |
 | `screenshot` | Capture visual evidence when it is useful |
 | `audit` | Run an axe-core accessibility scan |
-| `evidence` | Retrieve recorded browser errors and failed requests; **(unreleased)** drill into findings, network and timeline |
+| `evidence` | Retrieve recorded browser errors and failed requests; drill into findings, network and timeline |
 | `flow` | Start, save, list, inspect, run or export recorded journeys |
 | `close` | Close the browser |
 
@@ -166,18 +166,18 @@ Instead of asking a model to decide every obvious click, FastQA runs a sequence 
 
 The repository's benchmark runs the same login, cart and currency journey on the bundled demo shop:
 
-| Metric | @playwright/mcp 0.0.86 | FastQA 0.3.2 |
+| Metric | @playwright/mcp 0.0.86 | FastQA 1.0 |
 |---|---:|---:|
 | Tool calls / model turns | 10 | **2** |
-| Returned tokens (approx.) | 1,270 | **310** |
-| Tool schema tokens (approx.) | 5,300 | **1,420** |
-| Browser-side time, one run | 3.2 s | **2.5 s** |
+| Returned tokens (approx.) | 1,270 | **330** |
+| Tool schema tokens (approx.) | 5,300 | **1,840** |
+| Browser-side time, one run | 3.1 s | **2.5 s** |
 | Estimated end-to-end at 3 s per model turn | ~33 s | **~8.5 s** |
 | Replay of the saved flow | needs the model again | **1.4 s, no model** |
 
 These are results for one small fixture on one machine, not universal guarantees. The end-to-end row is an estimate that assumes 3 seconds per model turn; no live model was timed. Reproduce with `npm run bench`. Real results depend on the site, client, model, hardware and network.
 
-The unreleased observation layer was measured against 0.3.2 on the same fixture with 30 warm runs (`npm run perf`): the same 2 tool calls, median and p95 browser-side time within 1%, clean responses 3% to 11% larger (one extra line), and tool schemas of about 1,840 tokens instead of 1,420. Method and numbers are in the [reference](docs/REFERENCE.md#measured-performance).
+The observation layer added in 1.0 was measured against 0.3.2 on the same fixture with 30 warm runs (`npm run perf`): the same 2 tool calls, median and p95 browser-side time within 1%, clean responses 3% to 11% larger (one extra line), and tool schemas of about 1,840 tokens instead of 1,420. Method and numbers are in the [reference](docs/REFERENCE.md#measured-performance).
 
 ## What FastQA can test
 
@@ -192,9 +192,7 @@ The unreleased observation layer was measured against 0.3.2 on the same fixture 
 | Data-driven runs | Replay a flow with CSV input |
 | Reporting | Failure screenshots, HTML and JUnit XML |
 
-## Continuous QA (unreleased)
-
-Implemented and tested in this source tree; not in the npm package yet.
+## Continuous QA
 
 While steps run, FastQA watches the browser and applies deterministic rules. Results end with a `QA:` line. On a clean batch that is one short line. When something was noticed, it lists candidate findings with the action they belong to and the ids of the evidence.
 
@@ -225,7 +223,7 @@ What it does:
 - **Evidence you can hand over.** A sanitized session bundle and a candidate bug draft in Markdown, with reproduction steps as executed and the limits stated.
 - **Privacy first.** Metadata only by default. Query values, credentials and recognised secrets are removed from every output. Payload capture is opt-in, allowlisted and bounded.
 
-What it does not do: it does not prove correctness, it does not test what the agent did not exercise, and a finding is a lead to verify, not a confirmed defect. Backend-only traffic and business intent that never reach the browser are not visible to it. See the [reference](docs/REFERENCE.md#continuous-qa-unreleased) for rules, modes, configuration and limits, and the [roadmap](docs/FASTQA-ROADMAP.md) for the design behind it.
+What it does not do: it does not prove correctness, it does not test what the agent did not exercise, and a finding is a lead to verify, not a confirmed defect. Backend-only traffic and business intent that never reach the browser are not visible to it. See the [reference](docs/REFERENCE.md#continuous-qa) for rules, modes, configuration and limits, and the [roadmap](docs/FASTQA-ROADMAP.md) for the design behind it.
 
 ## From AI exploration to deterministic CI
 
@@ -248,7 +246,7 @@ npx fastqa-mcp run login --data=users
 
 The wildcard example uses POSIX quoting; on Windows use the quoting of your shell. The exit code is 0 when every flow passed and 1 when one failed, so it works as a pipeline stage. Use the JUnit XML in Jenkins or any other CI system.
 
-**(unreleased)** `--mode=strict` also fails the run on QA findings at or above the configured severity, and `--bundle` leaves a sanitized session bundle for investigation. Exported Playwright specs now contain executable network, error and accessibility assertions; in 0.3.2 those were comments.
+`--mode=strict` also fails the run on QA findings at or above the configured severity, and `--bundle` leaves a sanitized session bundle for investigation. Exported Playwright specs contain executable network, error and accessibility assertions.
 
 ### Where your files go
 
@@ -259,7 +257,7 @@ The wildcard example uses POSIX quoting; on Windows use the quoting of your shel
   reports/    HTML and JUnit results
   artifacts/  Failure screenshots
   tests/      Exported Playwright specs
-  sessions/   Session bundles (unreleased, opt-in)
+  sessions/   Session bundles (opt-in)
 ```
 
 Open `reports/latest.html` for the latest replay report. Protect this directory and do not commit sensitive test data.
@@ -279,7 +277,7 @@ Run only against applications you are allowed to test. Use isolated test account
 
 ## Current limitations
 
-FastQA targets Chromium-based browsers. Closed shadow roots are not reachable, CSS `expect_count` covers the main frame only, and one page is active at a time. Semantic targets pick the first visible match, so use a ref or a scoped selector for ambiguous controls (**(unreleased)** or strict locators, which refuse to guess). The accessibility checks do not replace a manual assessment. Prefer explicit state assertions over sleeps. Details are in the [reference](docs/REFERENCE.md#limitations).
+FastQA targets Chromium-based browsers. Closed shadow roots are not reachable, CSS `expect_count` covers the main frame only, and one page is active at a time. Semantic targets pick the first visible match, so use a ref or a scoped selector for ambiguous controls, or strict locators, which refuse to guess. The accessibility checks do not replace a manual assessment. Prefer explicit state assertions over sleeps. Details are in the [reference](docs/REFERENCE.md#limitations).
 
 ## Develop and contribute
 
