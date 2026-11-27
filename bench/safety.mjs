@@ -117,10 +117,18 @@ const place = [{ do: 'click', target: 'Place order' }, { do: 'expect_text', valu
   check('retention: only the newest artifacts.maxRuns bundles are kept', kept.length === 3, `${kept.length}: ${kept.join(', ')}`);
   mkdirSync(path.join(dir, 'sessions', 'my-notes'), { recursive: true });
   writeFileSync(path.join(dir, 'sessions', 'my-notes', 'keep.txt'), 'user file');
+  // an old complete bundle (past retentionDays) and a recent interrupted one (no summary.json yet)
+  const expired = path.join(dir, 'sessions', '20200101T000000Z-deadbeef');
+  mkdirSync(expired, { recursive: true }); writeFileSync(path.join(expired, 'summary.json'), '{}');
+  const today = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+  const interrupted = path.join(dir, 'sessions', `${today}T000000Z-0badc0de`);
+  mkdirSync(interrupted, { recursive: true }); writeFileSync(path.join(interrupted, 'observations.jsonl'), '');
   const r = await connect({ dir });
   await r.call('open', { url: `${base}/orders?notify=200`, fresh: true });
   await r.close();
   check('retention never touches anything that is not a fastqa run directory', existsSync(path.join(dir, 'sessions', 'my-notes', 'keep.txt')));
+  check('retention removes a bundle older than artifacts.retentionDays', !existsSync(expired));
+  check('retention keeps a recent bundle that is still being written', existsSync(interrupted));
 
   // failure screenshots are bounded too
   const shots = mkdtempSync(path.join(tmpdir(), 'fq-safe-4s-'));

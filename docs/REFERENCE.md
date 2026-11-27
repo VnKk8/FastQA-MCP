@@ -438,10 +438,12 @@ npm test          # build, unit tests, then every end-to-end suite over real MCP
 npm run test:unit # unit tests only (after npm run build)
 npm run bench     # one comparison run against @playwright/mcp
 npm run perf      # 30 warm samples: median, p95, response sizes, schema size, replay, memory
+npm run test:package  # pack the tarball, install it into an empty project, run the installed server and CLI
+npm run test:env      # attach over CDP to a running Chromium; TLS defaults with a throwaway certificate (needs openssl)
 npm run demo      # demo shop on http://127.0.0.1:4321 (fault scenarios: /orders?notify=500 and others, see bench/demo-server.mjs)
 ```
 
-Test suites in `bench/`: `unit*.mjs` (pure modules), `e2e`, `export-check`, `qa-features` (0.3 suites, unchanged), `compat` (byte-for-byte comparison with 0.3.2 output), `observe`, `privacy`, `policy`, `safety`, `artifacts`.
+Test suites in `bench/`: `unit*.mjs` (pure modules), `e2e`, `export-check`, `qa-features` (0.3 suites, unchanged), `compat` (byte-for-byte comparison with 0.3.2 output), `observe`, `privacy`, `policy`, `safety`, `artifacts`, `review` and `unit-review` (regressions for the findings of two independent reviews).
 
 CI (`.github/workflows/ci.yml`) runs `npm test` on Node 20, 22 and 24 for every push and pull request. It also fails if the committed `dist/` doesn't match the source, so run `npm run build` and commit `dist/` with source changes.
 

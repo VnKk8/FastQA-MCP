@@ -12,7 +12,7 @@ If context is lost: re-read the two plans and this file, then continue at the fi
 | FQA-001 | Baseline, compatibility harness, fault fixtures | verified | `docs/evolution-baseline.md`, `bench/compat.mjs` (50 checks), fixtures in `bench/demo-server.mjs` |
 | FQA-002 | Scoped actions and request lifecycle | verified | `bench/observe.mjs` (38), correlation tests in `bench/unit.mjs` |
 | FQA-003 | Privacy and bounded capture | verified | `bench/privacy.mjs` (37), redaction and config tests in `bench/unit.mjs` |
-| FQA-004 | Locator and session safety | verified | `bench/safety.mjs` (32) |
+| FQA-004 | Locator and session safety | verified | `bench/safety.mjs` (34), `bench/cdp-tls.mjs` |
 | FQA-005 | Rule registry and finding lifecycle | verified | rule and dedup tests in `bench/unit.mjs`, `bench/observe.mjs` |
 | FQA-006 | Policy, compact MCP integration, profiles (incl. 006a) | verified | `bench/policy.mjs` (58), OpenCode smoke run |
 | FQA-007 | Evidence bundle, session artifacts, reports | verified | `bench/artifacts.mjs` (46), `bench/privacy.mjs`, `bench/safety.mjs` |
@@ -53,10 +53,11 @@ If context is lost: re-read the two plans and this file, then continue at the fi
 | `bench/observe.mjs` | 38 of 38 |
 | `bench/privacy.mjs` | 37 of 37 |
 | `bench/policy.mjs` | 58 of 58 |
-| `bench/safety.mjs` | 32 of 32 |
+| `bench/safety.mjs` | 34 of 34 |
 | `bench/artifacts.mjs` | 46 of 46 |
 | `bench/review.mjs` (regressions for the independent review) | 24 of 24 |
 | `bench/package-smoke.mjs` (`npm run test:package`, not part of `npm test`) | 28 of 28 |
+| `bench/cdp-tls.mjs` (`npm run test:env`, not part of `npm test`: attaches to a running Chromium, and makes a throwaway certificate with `openssl`) | 15 of 15 |
 
 Test order was not always "red first". `bench/observe.mjs` was written before the implementation and failed 27 of 38 checks against the 0.3.2 build. `bench/unit-review.mjs` (20 of 20 failing first) and `bench/review.mjs` (18 of 24 failing against the pre-fix build) were written before the review fixes. `bench/unit.mjs`, `policy`, `privacy`, `safety` and `artifacts` were written after the code they cover; they found the defects listed below, which were then fixed.
 
@@ -109,15 +110,16 @@ Notes:
 
 **Readiness statement.** The implementation is complete against the plan and verified on one machine. I do not claim v1.0 readiness for release: the items under "Not verified" are open, and the version and release are the maintainer's decision.
 
+## Verified late
+
+Three items were first listed as not verified and then tested: attaching to a running Chromium over CDP with a tab fastqa does not drive, HTTPS with an invalid certificate (accepted with a warning without a config file, rejected with a hint once a config file exists, both overrides), and the age rule of bundle retention. See `bench/cdp-tls.mjs` and `bench/safety.mjs`.
+
 ## Not verified
 
 - **Node 20 and 22, and Linux.** All tests ran on Node 24.11.1 on Windows. The CI matrix (Node 20/22/24 on Ubuntu) has not run because nothing was pushed. The code compiles against `lib: ES2022`, so newer library APIs would not compile, but that is not a test run.
 - **Timing-sensitive tests on slow CI runners.** Several scenarios depend on delays (a 2.2 s response crossing a 1.5 s settle, polling every 150 to 250 ms). They have margins of several hundred milliseconds and passed repeatedly here; a slow shared runner could still make them flaky.
 - **A second real MCP client** (see the gate above).
-- **HTTPS with an invalid certificate.** The TLS default is covered by unit tests of the configuration only; there is no HTTPS fixture.
-- **`FASTQA_CDP_URL`** (attaching to a running Chrome): listener cleanup on a context that is not closed is implemented but not tested.
 - **Symlink escape** for contract spec paths: implemented (realpath containment) but not tested; creating symlinks needs elevation on this machine.
-- **`artifacts.retentionDays`**: the age rule is implemented; only the `maxRuns` rule has a test.
 - **Service workers, WebSockets, cross-browser.** Out of scope and documented as limits.
 
 ## Independent review
@@ -142,7 +144,7 @@ Regression tests: `bench/unit-review.mjs` (20 tests; all 20 failed before the fi
 | C4 | `expect_request` marked only the first matching response as expected | Important | Every response of the batch that satisfies the assertion is marked | `review.mjs` negative-test block |
 | C5 | A known failure that happened again printed "QA: clean" and passed the strict batch policy; a finding that was expected first and then recurred unexpectedly was never listed | Important | Recurring findings are listed again ("known finding seen again", `×2 (again)`) and count for the batch policy | `unit-review` C5 (two tests); `review.mjs` recurrence block |
 | C6 | Background and periodic heuristics misfired on action-driven traffic (four identical steps, single-endpoint APIs such as GraphQL); `PERF-CALLS` skipped ambiguous requests; a later background occurrence overwrote the association | Important | A request that starts while the step itself executes is never demoted; ambiguous requests count under their first candidate action; the first association is kept | `unit-review` C6 (four tests) |
-| C7 | Context-level listeners saw service worker traffic and, over CDP, other tabs: legacy `expect_no_errors` could fail on traffic 0.3 never saw; page listeners were not re-bound after `open fresh` on CDP | Important | Service worker requests are ignored; over CDP only driven pages are observed; page listeners are re-bound | `review.mjs` service worker block. The CDP part is implemented but not tested |
+| C7 | Context-level listeners saw service worker traffic and, over CDP, other tabs: legacy `expect_no_errors` could fail on traffic 0.3 never saw; page listeners were not re-bound after `open fresh` on CDP | Important | Service worker requests are ignored; over CDP only driven pages are observed; page listeners are re-bound | `review.mjs` service worker block; `cdp-tls.mjs` for the CDP part (4 of its checks failed on the pre-fix build) |
 | C9 | The exported `expectNoErrors` checked instantly, while replay lets the page settle after each click: a failure arriving 200 ms later failed replay but passed the spec | Important | The helper waits (bounded 1.5 s) for open requests first; the remaining difference is listed in `parity.notExported` | `review.mjs` export block (real `@playwright/test` run) |
 
 Minor findings fixed along the way: the `late` flag was set on findings that arrived between the end of a batch and its own result; a bundle written mid-session was not refreshed at close; the bundle stream could be written after it ended; a compressed response was sized by its wire length; the reader slot was freed before the read ended; a throwing rule could become an unhandled rejection; retention could remove a long-running session's bundle; a path pattern with several wildcards was polynomial; a flow name with a newline escaped the comment in an exported spec; `privacy.secretKeys: [""]` made every key secret; `safe()` had changed the file name of flows that start with a dot; `flow export` errors had stopped being MCP errors.
