@@ -4,7 +4,8 @@ import type { Association, Finding, Observation, RequestRecord, Severity } from 
 import { sevRank } from '../observation/types.js';
 import type { Config } from '../config.js';
 import { endpointMatches, jsonPointer } from '../util/paths.js';
-import { deadClick, duplicates, silentFailures, type ActionEffects } from './effects.js';
+import { deadClick, duplicates, silentFailures, falseSuccess, falseFailure, stuckLoading, type ActionEffects, type Judging } from './effects.js';
+import { oneLine } from '../util/text.js';
 
 export const RULES = [
   { id: 'NET-5XX', version: 1, description: 'First-party HTTP 5xx response' },
@@ -20,10 +21,15 @@ export const RULES = [
   { id: 'PERF-BASELINE', version: 1, description: 'Response slower than the recorded baseline for this environment' },
   { id: 'PERF-CALLS', version: 1, description: 'Endpoint called more often than the configured limit' },
   { id: 'STATE-INVARIANT', version: 1, description: 'Configured UI state expectation not met after a matching response' },
-  { id: 'SILENT-FAILURE', version: 1, description: 'A first-party submission of an action failed and, until the batch ended, the page showed no message, dialog, new text, field change or new page' },
-  { id: 'DUPLICATE-SUBMIT', version: 1, description: 'One action sent the same submission (method, URL and body) more than once' },
+  // version 2: a retry is recognised by the same submission identity (method, URL, body), no longer by the route alone
+  { id: 'SILENT-FAILURE', version: 2, description: 'A first-party submission of an action failed and, until the batch ended, the page showed no message, dialog, new text, field change or new page' },
+  // version 2: bodies are compared by a hash of all their bytes (never by length); idempotency keys mark safe retries
+  { id: 'DUPLICATE-SUBMIT', version: 2, description: 'One action sent the same submission (method, URL and body) more than once' },
   { id: 'DEAD-CLICK', version: 1, description: 'A click on a button or link changed nothing while it was watched: no request, navigation, DOM or form change, dialog, download or picker' },
   { id: 'BROKEN-IMAGE', version: 1, description: 'A first-party image arrived but could not be shown (its request did not fail)' },
+  { id: 'FALSE-SUCCESS', version: 1, description: 'A submission of the action failed, yet right after it the page showed a success message and no error' },
+  { id: 'FALSE-FAILURE', version: 1, description: 'Every call of the action succeeded at HTTP level, yet right after it the page showed an error message (2xx is not proof of business success)' },
+  { id: 'STUCK-LOADING', version: 1, description: 'A progress indicator that appeared with the action was still shown after all its calls had an outcome and a bounded extra wait' },
 ] as const;
 export type RuleId = typeof RULES[number]['id'];
 const ruleVersion = (id: string) => RULES.find((r) => r.id === id)?.version ?? 1;
@@ -171,10 +177,40 @@ export class QualityEngine {
   }
 
   /** Rules over what one action did (see effects.ts). Called once per action, when its batch ends. */
-  onAction(e: ActionEffects, all: Iterable<RequestRecord>) {
+  onAction(e: ActionEffects, j: Judging) {
     if (!this.enabled) return;
     const assoc: Association = { actionId: e.action.actionId, confidence: 'inferred', reason: 'observed while the action ran and settled' };
-    for (const rec of silentFailures(e, all)) {
+    const q = (s: string) => JSON.stringify(s.length > 60 ? s.slice(0, 59) + '…' : s);
+    const fs = falseSuccess(e, j);
+    if (fs) {
+      const r = fs.rec;
+      this.report({
+        // high only when the message's classes said success; words alone are a weaker lead (medium, low confidence)
+        ruleId: 'FALSE-SUCCESS', severity: fs.strong ? 'high' : 'medium', rec: r, association: r.association, signature: 'false-success', confidence: fs.strong ? 'medium' : 'low',
+        title: `${e.action.label}: the page said ${q(fs.said)} but ${r.method} ${r.route} ${outcome(r)}`,
+        actual: `success message ${q(fs.said)} after a failed submission`, expected: 'an error message when the submission fails',
+      });
+    }
+    const ff = falseFailure(e, j);
+    if (ff) {
+      const r = ff.rec;
+      this.report({
+        ruleId: 'FALSE-FAILURE', severity: 'medium', rec: r, association: r.association, signature: 'false-failure', confidence: ff.strong ? 'medium' : 'low',
+        title: `${e.action.label}: the page said ${q(ff.said)} although ${r.method} ${r.route} returned ${r.status}`,
+        actual: `error message ${q(ff.said)}; every call of the action returned < 400`, expected: 'no error message when the operation succeeded (HTTP 2xx alone does not prove it did)',
+      });
+    }
+    // A mixed outcome (some submissions of the action succeeded, some failed) is not stored as a finding of its own: each
+    // failed part already is one (NET-*), with its own suppression and policy. It is said in that finding's explanation.
+    const stuck = stuckLoading(e);
+    if (stuck.length) {
+      this.report({
+        ruleId: 'STUCK-LOADING', severity: 'low', association: assoc, signature: e.action.label, confidence: 'medium',
+        title: `${e.action.label}: a loading indicator was still shown after all its calls finished`,
+        actual: `${stuck.length} progress indicator(s) still visible ${e.watchedMs}ms after the action, after its calls had an outcome`, expected: 'the indicator goes away when the operation ends',
+      });
+    }
+    for (const rec of silentFailures(e, j.sentAgain)) {
       const what = rec.status !== undefined && rec.status >= 400 ? `returned ${rec.status}` : `failed (${(rec.failure ?? 'failed').replace(/^net::/, '')})`;
       this.report({
         ruleId: 'SILENT-FAILURE', severity: 'medium', rec, association: rec.association, signature: 'silent',
@@ -261,6 +297,9 @@ export class QualityEngine {
     });
   }
 
+  /** A rule or check that could not be evaluated in this session, with the reason (counted, never a pass). */
+  markNotEvaluated(id: string, reason: string) { this.skip(id, reason); }
+
   private skip(id: string, reason: string) {
     const e = this.notEvaluated.get(id);
     if (e) e.count++; else if (this.notEvaluated.size < 100) this.notEvaluated.set(id, { reason, count: 1 });
@@ -269,6 +308,8 @@ export class QualityEngine {
   // ---------------------------------------------------------------- lifecycle
 
   private report(d: Draft): Finding | undefined {
+    // page-supplied text (messages, console output) stays on one line: it can never forge a line of the result
+    d = { ...d, title: oneLine(d.title, 300), actual: oneLine(d.actual, 400), expected: d.expected === undefined ? undefined : oneLine(d.expected, 300) };
     const rec = d.rec;
     const fp = `${d.ruleId}|${rec ? `${rec.method} ${rec.origin}${rec.route}` : ''}|${d.signature}`;
     const policy = this.classify(d);
@@ -339,8 +380,20 @@ export class QualityEngine {
     }
   }
 
+  /** request ids an explicit assertion declared expected (bounded) */
+  private expectedReqs = new Set<string>();
+  /** An explicit assertion or an expected-response policy declared this response expected (a negative test). */
+  isExpected(rec: RequestRecord): boolean {
+    if (this.expectedReqs.has(rec.id)) return true;
+    if (rec.status === undefined) return false;
+    const scope = this.ctx.scopeOf(rec.batchId);
+    return this.cfg.expectedResponses.some((e) => e.scope === scope && e.statuses.includes(rec.status!) && endpointMatches(e, rec.method, rec.path));
+  }
+
   /** An explicit expect_request assertion passed on this response: the agent declared it as expected (a negative test). */
   markExpected(requestId: string, reason: string) {
+    if (this.expectedReqs.size > 5000) this.expectedReqs.clear();
+    this.expectedReqs.add(requestId);
     for (const f of this.findings) {
       if ((f.ruleId !== 'NET-4XX' && f.ruleId !== 'NET-5XX') || !f.requestIds.includes(requestId)) continue;
       const key = `${f.id}|${requestId}`;
@@ -385,6 +438,7 @@ export class QualityEngine {
 }
 
 const confRank = { low: 0, medium: 1, high: 2 } as const;
+const outcome = (r: RequestRecord) => (r.status !== undefined ? `returned ${r.status}` : `failed (${(r.failure ?? 'failed').replace(/^net::/, '')})`);
 /** one finding per distinct endpoint or message: capped so a page that logs unique errors cannot grow the list forever */
 const MAX_FINDINGS = 500;
 export const byImportance = (a: Finding, b: Finding) =>

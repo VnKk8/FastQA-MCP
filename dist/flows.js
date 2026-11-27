@@ -7,14 +7,19 @@ import { redactor } from './privacy/redact.js';
 import { exportBundle } from './services.js';
 import { findConsentButton, COOKIE_WAIT_MS } from './cookies.js';
 import { uploadFiles, UPLOAD_MAX_BYTES } from './upload.js';
+import { signatureOf, scopeKey, scopeOf, compareBehaviour, readBehaviour } from './quality/baseline.js';
 export { FLOW_DIR };
 const flowPath = (name) => path.join(FLOW_DIR(), 'flows', `${safe(name)}.json`);
 export async function saveFlow(name, steps) {
     const p = flowPath(name);
     // A secret the user supplied through a {{placeholder}} goes back to that placeholder: the file stays replayable and
     // holds no secret. Each string is cleaned before serialization; values learned from the page never rewrite a flow.
-    const clean = (v) => (typeof v === 'string' ? redactor.knownOnly(v) : Array.isArray(v) ? v.map(clean) : v);
-    const flow = { name, created: new Date().toISOString(), schema: 2, steps: steps.map((s) => Object.fromEntries(Object.entries(s).map(([k, v]) => [k, clean(v)]))) };
+    // Nested values (the recorded identity of an element, say) are cleaned the same way, at any depth.
+    const clean = (v, depth = 0) => (typeof v === 'string' ? redactor.knownOnly(v)
+        : Array.isArray(v) ? v.map((x) => clean(x, depth + 1))
+            : v && typeof v === 'object' && depth < 8 ? Object.fromEntries(Object.entries(v).filter(([, x]) => x !== undefined).map(([k, x]) => [k, clean(x, depth + 1)]))
+                : v);
+    const flow = { name, created: new Date().toISOString(), schema: 2, steps: steps.map((s) => clean(s)) };
     await writeAtomic(p, JSON.stringify(flow, null, 2));
     return p;
 }
@@ -29,6 +34,8 @@ export async function listFlows() {
         return [];
     }
 }
+/** Upper bound of --workers: contexts share one browser process and one machine. */
+export const MAX_WORKERS = 8;
 /** Observers of the latest flow runs, so `evidence {session}` can drill into a finished replay. */
 export const recentRuns = [];
 /** Replays a flow in its own isolated browser context. No model involved. Same executor, rules and policy as interactive use. */
@@ -38,7 +45,8 @@ export async function runFlow(name, vars = {}, shared, opts = {}) {
     s.mode = opts.mode ?? shared?.mode;
     if (shared?.browser)
         s.browser = shared.browser; // reuse the running browser process, new context
-    s.options = { bundle: opts.bundle, baseline: opts.baseline };
+    s.options = { bundle: opts.bundle, baseline: opts.baseline, env: opts.env };
+    s.role = opts.role ?? (typeof flow.role === 'string' ? flow.role : undefined);
     opts.onSession?.(s);
     const t0 = Date.now();
     const started = new Date().toISOString();
@@ -49,6 +57,9 @@ export async function runFlow(name, vars = {}, shared, opts = {}) {
     let shotFile;
     let url;
     let q;
+    let sig;
+    let scope;
+    let baselineLines;
     try {
         await s.ensure();
         const b = await runBatch(s, flow.steps, { kind: 'flow', scope: flow.name, vars, number: true });
@@ -56,6 +67,13 @@ export async function runFlow(name, vars = {}, shared, opts = {}) {
         stepsOk = b.ok;
         failedAt = b.failedAt;
         q = await finalize(s);
+        // behaviour: compared at the end of the run only (CPU only, from what was observed), never per action
+        if (opts.baseline && s.obs) {
+            sig = signatureOf(s.obs, { batchId: b.batchId, assertions: b.assertions });
+            scope = scopeKey(scopeOf(s.obs));
+            if (opts.baseline === 'check')
+                baselineLines = compareBehaviour(opts.behaviour ?? undefined, flow.name, scope, sig).lines;
+        }
     }
     catch (e) {
         stepsOk = false;
@@ -86,7 +104,7 @@ export async function runFlow(name, vars = {}, shared, opts = {}) {
     const run = {
         name, flow: flow.name, ok, stepsOk, ms: Date.now() - t0, lines, failedAt, evidence, screenshot, shotFile, url, started,
         sessionId: obs?.sessionId, runId: obs?.runId, quality: q?.block, policy: q?.policy, qualityText: q?.text,
-        findings, findingLines: [],
+        findings, findingLines: [], permissions: [...s.permissions], role: s.role, signature: sig, scope, baselineLines,
     };
     if (obs) {
         const { findingLine } = await import('./quality/summary.js');
@@ -327,20 +345,57 @@ function splitCsv(line) {
     out.push(cur);
     return out;
 }
-/** Runs flows, optionally once per dataset row, then writes an HTML report and a JUnit XML file. */
+/**
+ * Runs flows, optionally once per dataset row, then writes an HTML report and a JUnit XML file.
+ * workers > 1: that many flows (or rows) at a time, each in its own browser context of one shared browser process.
+ * Results keep the order of the flows and rows; nothing is shared between contexts (cookies, storage, variables,
+ * observations, findings). Parallel flows can still meet in the application's data: use independent test data.
+ */
 export async function runSuite(names, vars, dataset, shared, opts = {}) {
     const rows = dataset ? await loadDataset(dataset) : [{}];
-    const runs = [];
-    for (const n of names) {
-        for (let i = 0; i < rows.length; i++) {
-            const r = await runFlow(n, { ...vars, ...rows[i] }, shared, opts);
-            if (dataset)
-                r.name = `${n} [row ${i + 1}: ${Object.entries(rows[i]).filter(([k]) => !redactor.isSecretKey(k) && !/key|cc/i.test(k)).map(([, v]) => v).join(', ').slice(0, 40)}]`;
-            runs.push(r);
-        }
+    const jobs = names.flatMap((n) => rows.map((row, i) => ({ n, row, i })));
+    // over CDP every flow would use the one context of the attached browser: no isolation, so one at a time
+    const asked = Math.floor(opts.workers ?? 1);
+    const workers = process.env.FASTQA_CDP_URL ? 1 : Math.max(1, Math.min(MAX_WORKERS, asked, jobs.length || 1));
+    const o2 = { ...opts, behaviour: opts.baseline === 'check' ? readBehaviour() ?? null : undefined };
+    const runs = new Array(jobs.length);
+    let owner;
+    if (workers > 1 && !shared?.browser) {
+        owner = new Session();
+        owner.mode = opts.mode;
+        await owner.startBrowser();
     }
+    const host = shared ?? owner;
+    let next = 0;
+    let failure;
+    const work = async () => {
+        for (;;) {
+            const k = next++;
+            if (k >= jobs.length || failure)
+                return;
+            const { n, row, i } = jobs[k];
+            try {
+                const r = await runFlow(n, { ...vars, ...row }, host, o2);
+                if (dataset)
+                    r.name = `${n} [row ${i + 1}: ${Object.entries(row).filter(([key]) => !redactor.isSecretKey(key) && !/key|cc/i.test(key)).map(([, v]) => v).join(', ').slice(0, 40)}]`;
+                runs[k] = r;
+            }
+            catch (e) {
+                failure ??= e;
+            } // e.g. a flow file that does not exist: running jobs finish, no new one starts
+        }
+    };
+    try {
+        await Promise.all(Array.from({ length: workers }, work));
+    }
+    finally {
+        if (owner)
+            await owner.close();
+    }
+    if (failure)
+        throw failure;
     const { writeReports } = await import('./report.js');
     const { loadConfig } = await import('./config.js');
     const files = await writeReports(runs, FLOW_DIR(), loadConfig(FLOW_DIR(), opts.mode).artifacts.maxReports);
-    return { runs, ...files };
+    return { runs, ...files, workers };
 }

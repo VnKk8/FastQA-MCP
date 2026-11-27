@@ -3,15 +3,18 @@ import { Session, DEFAULT_TIMEOUT, sleep, AmbiguousTargetError, warnLegacyTls } 
 import { redactor } from './privacy/redact.js';
 import { dismissCookies, describeOutcome, COOKIE_CHOICES, COOKIE_WAIT_MS, COOKIE_RECHECK_MS } from './cookies.js';
 import { prepareUpload, accepts, sendAsBytes, asBytes } from './upload.js';
+import { judgeBackend, judgeUi, permissionText, operationOf } from './permissions.js';
 /** How long an upload step waits for the file picker once its click on an element that is not a file input has landed. */
 const CHOOSER_WAIT_MS = 2000;
 export const STEP_KINDS = [
     'goto', 'click', 'dblclick', 'hover', 'fill', 'type', 'press', 'select', 'check', 'uncheck', 'wait', 'cookies', 'upload',
     'expect_text', 'expect_no_text', 'expect_url', 'expect_title', 'expect_value',
     'expect_visible', 'expect_hidden', 'expect_enabled', 'expect_disabled', 'expect_count',
-    'expect_request', 'expect_no_errors', 'expect_accessible',
+    'expect_request', 'expect_no_errors', 'expect_accessible', 'expect_permission',
 ];
 const q = JSON.stringify;
+/** Steps that search their target (or, for expect_text, the text) inside a `within` container. */
+const WITHIN_STEPS = /^(click|dblclick|hover|check|uncheck|fill|type|select|press|wait|expect_text|expect_no_text|expect_value|expect_visible|expect_hidden|expect_enabled|expect_disabled)$/;
 async function poll(check, timeout, interval = 50) {
     const end = Date.now() + timeout;
     do {
@@ -44,7 +47,7 @@ function need(s, field) {
 }
 /** How a step is shown to the model and in reports. Built from the template, so values bound from env never echo back. */
 export function labelOf(L) {
-    return `${L.do}${L.target ? ' ' + q(L.target) : ''}${L.value !== undefined && L.do !== 'fill' && L.do !== 'type' ? ' ' + q(L.value) : L.value !== undefined ? ' ' + q(maskish(L)) : ''}`;
+    return `${L.do}${L.target ? ' ' + q(L.target) : ''}${L.within ? ` within ${q(L.within)}` : ''}${L.value !== undefined && L.do !== 'fill' && L.do !== 'type' ? ' ' + q(L.value) : L.value !== undefined ? ' ' + q(maskish(L)) : ''}`;
 }
 export async function runStep(session, s, tmpl) {
     // V(): how a value appears in exported code. Templated values ({{x}}) become env lookups, never literals.
@@ -57,7 +60,13 @@ export async function runStep(session, s, tmpl) {
     let note = '';
     const facts = [];
     let target; // the element the step acted on, to explain a failure
+    // the container limit and the recorded identity go with every target lookup, and back into the recording
+    const opt = { within: s.within, identity: s.id };
+    const keep = (r) => ({ within: r.within ?? s.within, id: r.identity ?? s.id });
     try {
+        // `within` is a hard limit: a step that cannot honour it refuses it instead of ignoring it
+        if (s.within && (!WITHIN_STEPS.test(s.do) || (/^(press|wait)$/.test(s.do) && !s.target)))
+            throw new Error(`"within" is not supported by "${s.do}"${s.target ? '' : ' without a target'}`);
         switch (s.do) {
             case 'goto': {
                 const url = need(s, 'value');
@@ -91,7 +100,7 @@ export async function runStep(session, s, tmpl) {
             case 'hover':
             case 'check':
             case 'uncheck': {
-                const r = await session.resolve(need(s, 'target'), 'click', timeout, s.frame);
+                const r = await session.resolve(need(s, 'target'), 'click', timeout, s.frame, opt);
                 target = r.loc;
                 if (s.do === 'click')
                     await r.loc.click({ timeout });
@@ -103,14 +112,14 @@ export async function runStep(session, s, tmpl) {
                     await r.loc.check({ timeout });
                 if (s.do === 'uncheck')
                     await r.loc.uncheck({ timeout });
-                recorded = { ...s, target: r.record, frame: r.frame, code: `await ${r.code}.${s.do}();` };
+                recorded = { ...s, target: r.record, frame: r.frame, ...keep(r), code: `await ${r.code}.${s.do}();` };
                 break;
             }
             case 'fill':
             case 'type':
             case 'select': {
                 const value = s.value ?? '';
-                const r = await session.resolve(need(s, 'target'), 'fill', timeout, s.frame);
+                const r = await session.resolve(need(s, 'target'), 'fill', timeout, s.frame, opt);
                 // A placeholder value typed into a password-like field is a secret: hide it wherever it shows up later.
                 const used = boundVars.get(s);
                 if (used?.length && s.do !== 'select' && (/pass|pwd|secret|token/i.test(s.target || '') || await r.loc.evaluate((el) => el.type === 'password').catch(() => false))) {
@@ -149,15 +158,15 @@ export async function runStep(session, s, tmpl) {
                     }
                 }
                 const method = s.do === 'select' ? 'selectOption' : s.do === 'type' ? 'pressSequentially' : 'fill';
-                recorded = { ...s, target: r.record, frame: r.frame, code: `await ${r.code}.${method}(${V(value)});` };
+                recorded = { ...s, target: r.record, frame: r.frame, ...keep(r), code: `await ${r.code}.${method}(${V(value)});` };
                 break;
             }
             case 'press': {
                 const key = need(s, 'value');
                 if (s.target) {
-                    const r = await session.resolve(s.target, 'fill', timeout, s.frame);
+                    const r = await session.resolve(s.target, 'fill', timeout, s.frame, opt);
                     await r.loc.press(key, { timeout });
-                    recorded = { ...s, target: r.record, frame: r.frame, code: `await ${r.code}.press(${q(key)});` };
+                    recorded = { ...s, target: r.record, frame: r.frame, ...keep(r), code: `await ${r.code}.press(${q(key)});` };
                 }
                 else {
                     await page.keyboard.press(key);
@@ -167,9 +176,9 @@ export async function runStep(session, s, tmpl) {
             }
             case 'wait': {
                 if (s.target) {
-                    const r = await session.resolve(s.target, 'any', timeout, s.frame);
+                    const r = await session.resolve(s.target, 'any', timeout, s.frame, opt);
                     await r.loc.waitFor({ state: 'visible', timeout });
-                    recorded = { ...s, target: r.record, frame: r.frame, code: `await ${r.code}.waitFor();` };
+                    recorded = { ...s, target: r.record, frame: r.frame, ...keep(r), code: `await ${r.code}.waitFor();` };
                 }
                 else {
                     const ms = Math.min(Number(s.value || 500), 10000);
@@ -236,7 +245,7 @@ export async function runStep(session, s, tmpl) {
                     await chooser.setFiles(payload, { timeout });
                 }
                 note = files.length ? files.map((f) => `${f.name} (${f.detail}${accepts(accept, f.name) ? '' : `; not in accept=${q(accept)}`})`).join(', ') : 'selection cleared';
-                recorded = { ...s, target: r.record, frame: r.frame, code: `await fq.upload(${r.code}, ${V(s.value ?? '')});` };
+                recorded = { ...s, target: r.record, frame: r.frame, ...keep(r), code: `await fq.upload(${r.code}, ${V(s.value ?? '')});` };
                 break;
             }
             case 'expect_text':
@@ -245,12 +254,25 @@ export async function runStep(session, s, tmpl) {
                 const want = s.do === 'expect_text';
                 let hitChain;
                 let sample = '';
+                let noBox = false;
                 const ok = await poll(async () => {
                     if (s.target) {
-                        const r = await session.resolve(s.target, 'any', 500, s.frame);
+                        const r = await session.resolve(s.target, 'any', 500, s.frame, opt);
                         sample = await r.loc.innerText({ timeout: 500 });
                         hitChain = r.frame;
                         return matches(sample, text) === want;
+                    }
+                    // within a container: only its text counts (another row saying the same is not this row); a container that is
+                    // not there proves nothing either way
+                    if (s.within) {
+                        const pool = await session.withinTexts(s.within, s.frame);
+                        noBox = !pool.length;
+                        if (noBox)
+                            return false;
+                        sample = pool.map((x) => x.text).join(' | ');
+                        const hit = pool.find((x) => matches(x.text, text));
+                        hitChain = hit?.chain.length ? hit.chain : undefined;
+                        return !!hit === want;
                     }
                     // whole page: main document + open shadow roots + every visible iframe
                     const texts = await session.deepTexts();
@@ -261,14 +283,18 @@ export async function runStep(session, s, tmpl) {
                     hitChain = hit?.chain.length ? hit.chain : undefined;
                     return !!hit === want;
                 }, timeout);
+                if (!ok && noBox)
+                    throw new Error(`no container shows ${q(s.within)}, so ${q(text)} could not be checked within it`);
                 if (!ok)
-                    throw new Error(want ? `text ${q(text)} not found. Visible text starts: ${q(sample.slice(0, 300))}` : `text ${q(text)} is still present`);
+                    throw new Error(want ? `text ${q(text)} not found${s.within ? ` within ${q(s.within)}` : ''}. Visible text starts: ${q(sample.slice(0, 300))}` : `text ${q(text)} is still present${s.within ? ` within ${q(s.within)}` : ''}`);
                 const sc = Session.codePrefix(hitChain);
                 const tx = regexOrString(text);
                 recorded = { ...s, frame: hitChain ?? (Array.isArray(s.frame) ? s.frame : undefined) };
-                recorded.code = want
-                    ? `await expect(${sc}.getByText(${tx}).first()).toBeVisible();`
-                    : `await expect(${sc}.getByText(${tx})).toHaveCount(0);`;
+                recorded.code = s.within && !s.target
+                    ? `// fastqa:unsupported ${s.do} ${q(text)} within ${q(s.within)} (container text check; enforced by fastqa replay only)`
+                    : want
+                        ? `await expect(${sc}.getByText(${tx}).first()).toBeVisible();`
+                        : `await expect(${sc}.getByText(${tx})).toHaveCount(0);`;
                 break;
             }
             case 'expect_url': {
@@ -287,31 +313,31 @@ export async function runStep(session, s, tmpl) {
             }
             case 'expect_value': {
                 const v = s.value ?? '';
-                const r = await session.resolve(need(s, 'target'), 'fill', timeout, s.frame);
+                const r = await session.resolve(need(s, 'target'), 'fill', timeout, s.frame, opt);
                 let actual = '';
                 const ok = await poll(async () => { actual = await r.loc.inputValue({ timeout: 300 }); return matches(actual, v) || (v === '' && actual === ''); }, timeout);
                 if (!ok)
                     throw new Error(`value is ${q(actual)}, expected ${q(v)}`);
-                recorded = { ...s, target: r.record, frame: r.frame, code: `await expect(${r.code}).toHaveValue(${regexOrString(v)});` };
+                recorded = { ...s, target: r.record, frame: r.frame, ...keep(r), code: `await expect(${r.code}).toHaveValue(${regexOrString(v)});` };
                 break;
             }
             case 'expect_visible':
             case 'expect_enabled':
             case 'expect_disabled': {
-                const r = await session.resolve(need(s, 'target'), 'any', timeout, s.frame);
+                const r = await session.resolve(need(s, 'target'), 'any', timeout, s.frame, opt);
                 if (s.do === 'expect_enabled' && !(await poll(() => r.loc.isEnabled(), timeout)))
                     throw new Error('element is disabled');
                 if (s.do === 'expect_disabled' && !(await poll(() => r.loc.isDisabled(), timeout)))
                     throw new Error('element is enabled');
                 const m = s.do === 'expect_visible' ? 'toBeVisible' : s.do === 'expect_enabled' ? 'toBeEnabled' : 'toBeDisabled';
-                recorded = { ...s, target: r.record, frame: r.frame, code: `await expect(${r.code}).${m}();` };
+                recorded = { ...s, target: r.record, frame: r.frame, ...keep(r), code: `await expect(${r.code}).${m}();` };
                 break;
             }
             case 'expect_hidden': {
                 const target = need(s, 'target');
                 const ok = await poll(async () => {
                     try {
-                        const r = await session.resolve(target, 'any', 1, s.frame);
+                        const r = await session.resolve(target, 'any', 1, s.frame, opt);
                         return !(await r.loc.isVisible());
                     }
                     catch {
@@ -321,7 +347,7 @@ export async function runStep(session, s, tmpl) {
                 if (!ok)
                     throw new Error('element is still visible');
                 // Only a raw selector can be exported faithfully: a semantic target is resolved by several strategies at run time.
-                recorded.code = /^(css=|#|\[|\.|testid=)/.test(target) && !s.frame
+                recorded.code = /^(css=|#|\[|\.|testid=)/.test(target) && !s.frame && !s.within
                     ? (/^testid=/.test(target) ? `await expect(page.getByTestId(${q(target.slice(7))})).toBeHidden();` : `await expect(page.locator(${q(target.replace(/^css=/, ''))})).toBeHidden();`)
                     : `// fastqa:unsupported expect_hidden ${q(target)} (semantic target; enforced by fastqa replay only)`;
                 break;
@@ -361,6 +387,53 @@ export async function runStep(session, s, tmpl) {
                 if (!ok)
                     throw new Error(seen.length ? `request seen but status not ${want}: ${seen.slice(-3).join(' ; ')}` : `no ${method ?? ''} request matching ${q(urlPart)} since this run started`);
                 recorded.code = `await fq.expectRequest(${q(spec)}, ${q(want)});`;
+                break;
+            }
+            case 'expect_permission': {
+                // target: an operation ("POST /api/projects", "/api/x") judged by the backend's answer, or a control ("Delete",
+                // a ref) judged by the UI alone. value: allowed | denied. The operation is never sent by this step: the caller
+                // performs it (as this role) earlier in the batch, and a denied operation is never retried.
+                const op = need(s, 'target').trim();
+                const expected = (s.value || '').trim().toLowerCase();
+                if (expected !== 'allowed' && expected !== 'denied')
+                    throw new Error(`"expect_permission" needs value "allowed" or "denied", got ${q(s.value)}`);
+                // an operation is a method (any case) and a path ("delete /api/users/7"), or a path; anything else is a control
+                // ("Delete user" is a button, not a DELETE request)
+                const operation = operationOf(op);
+                let r;
+                if (operation) {
+                    const method = operation.method;
+                    const urlPart = operation.path;
+                    let hits = [];
+                    await poll(async () => {
+                        hits = session.since(session.mark).filter((e) => e.kind === 'http' && (!method || e.method === method) && matches(e.url, urlPart));
+                        return hits.length > 0;
+                    }, timeout);
+                    r = judgeBackend(expected, hits.map((h) => h.status));
+                    // a denial that was the expectation is not a QA lead of its own (as an asserted negative test)
+                    if (r.verdict === 'pass' && expected === 'denied')
+                        for (const h of hits)
+                            if (h.status >= 400 && h.rid)
+                                session.obs?.quality.markExpected(h.rid, `explicit expect_permission ${op} denied`);
+                }
+                else {
+                    let state = 'hidden';
+                    try {
+                        const t = await session.resolve(op, 'any', Math.min(timeout, 1500), s.frame, opt);
+                        state = (await t.loc.isEnabled().catch(() => true)) ? 'available' : 'disabled';
+                    }
+                    catch (e) {
+                        if (e instanceof AmbiguousTargetError)
+                            throw e;
+                    }
+                    r = judgeUi(expected, state);
+                }
+                const check = { role: session.role ?? '', operation: op, expected, ...r };
+                session.notePermission(check);
+                if (check.verdict !== 'pass')
+                    throw new Error(permissionText(check));
+                note = permissionText(check);
+                recorded.code = `// fastqa:unsupported expect_permission ${q(op)} ${q(expected)} (role checks run in fastqa replay only)`;
                 break;
             }
             case 'expect_no_errors': {
@@ -451,7 +524,7 @@ export function bind(step, vars) {
             redactor.addSecret(v, k);
         return v;
     });
-    const bound = { ...step, target: sub(step.target), value: sub(step.value) };
+    const bound = { ...step, target: sub(step.target), value: sub(step.value), ...(step.within !== undefined ? { within: sub(step.within) } : {}) };
     if (used.length)
         boundVars.set(bound, used);
     return bound;

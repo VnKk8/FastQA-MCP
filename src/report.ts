@@ -35,6 +35,8 @@ export async function writeReports(runs: FlowRun[], dir: string, maxReports = 20
   <ol>${r.lines.map((l) => `<li class="${l.includes('✗') ? 'bad' : ''}">${esc(l.replace(/^\s*\d+\.\s*/, ''))}</li>`).join('')}</ol>
   ${r.evidence.length ? `<h4>Evidence</h4><ul class="ev">${r.evidence.map((e) => `<li>${esc(e)}</li>`).join('')}</ul>` : ''}
   ${quality(r)}
+  ${r.permissions?.length ? `<h4>Permissions <span class="ms">role ${esc(r.role || '(no label)')}: expected vs observed, with the evidence kind</span></h4><ul class="ev">${r.permissions.map((p) => `<li class="${p.verdict === 'pass' ? '' : 'bad'}">${esc(`${p.operation} · expect ${p.expected} · ${p.observed} [${p.provenance}] · ${p.verdict}${p.note ? ` — ${p.note}` : ''}`)}</li>`).join('')}</ul>` : ''}
+  ${r.baselineLines?.length ? `<h4>Behaviour baseline</h4><ul class="ev">${r.baselineLines.map((l) => `<li>${esc(l.replace(/^\s*-\s*/, ''))}</li>`).join('')}</ul>` : ''}
   ${r.url ? `<p class="ms">Page at failure: ${esc(r.url)}</p>` : ''}
   ${r.screenshot ? `<img alt="screenshot at failure" src="data:image/jpeg;base64,${r.screenshot}">` : ''}
 </details>`).join('\n');

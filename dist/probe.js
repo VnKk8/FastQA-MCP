@@ -18,6 +18,51 @@ export function probeInit() {
     const textOf = (el) => clip(el.innerText || el.textContent || '', 80);
     const kindOf = (el) => el.getAttribute('role') || (el.tagName === 'DIALOG' ? 'dialog' : /toast|snackbar/i.test(String(el.className)) ? 'toast' : 'status');
     const nameOf = (el) => clip(el.labels?.[0]?.textContent || el.getAttribute?.('aria-label') || el.getAttribute?.('placeholder') || el.name || el.id || '', 40);
+    // Tone of a message: its classes and data attributes first (alert-success, toast--error, MuiAlert-standardError), then
+    // its words. Text patterns are a weak signal and are only read inside message and notice elements, never arbitrary text.
+    // candidates; then: aria-busy, an indeterminate progress bar (no value: a step meter is not loading), or a class token
+    // that is a spinner / loader / loading word ("file-uploader" and "downloader" are not)
+    const BUSY = '[role=progressbar],[aria-busy=true],progress,[class*=pin],[class*=oad]';
+    const BUSY_TOKEN = /^(spinner|loader|loading)([-_].*)?$|[-_](spinner|loader|loading)$/i;
+    const isBusy = (el) => {
+        if (el.getAttribute('aria-busy') === 'true')
+            return true;
+        if (el.getAttribute('role') === 'progressbar' || el.tagName === 'PROGRESS')
+            return !el.hasAttribute('aria-valuenow') && !el.hasAttribute('value');
+        const cls = typeof el.className === 'string' ? el.className : '';
+        return cls.split(/\s+/).some((t) => BUSY_TOKEN.test(t));
+    };
+    const lang = String(document.documentElement?.lang || '').slice(0, 2).toLowerCase();
+    const OK_EN = /\b(success(ful(ly)?)?|saved|created|updated|added|deleted|removed|sent|submitted|thank you|thanks|completed?|confirmed)\b/i;
+    const BAD_EN = /\b(errors?|failed|failure|could ?n[o']t|cannot|can't|unable|try again|invalid|denied|not allowed|forbidden|went wrong|problem|declined|rejected|expired)\b/i;
+    // a negation turns a success word into a failure: "Changes not saved", "Message wasn't sent", "nicht gespeichert"
+    const NEG_EN = /\b(not|never|no longer|cannot|can't|couldn't|wasn't|weren't|isn't|aren't|didn't|hasn't|haven't|failed to|unable to|unsaved)\b/i;
+    const LOCAL = {
+        de: [/erfolgreich|gespeichert|erstellt|aktualisiert|gesendet|vielen dank/i, /fehler|fehlgeschlagen|nicht möglich|ungültig|verweigert|erneut versuchen/i, /\bnicht\b|\bkein/i],
+        fr: [/succès|réussi|enregistré|créé|mis à jour|envoyé|merci/i, /erreur|échec|échoué|impossible|invalide|refusé|réessayer/i, /\bpas\b|\bn'a\b|\bne\b/i],
+        es: [/éxito|guardado|creado|actualizado|enviado|gracias/i, /error|falló|fallido|no se pudo|inválido|denegado|inténtelo de nuevo/i, /\bno\b/i],
+        pt: [/sucesso|salvo|criado|atualizado|enviado|obrigado/i, /erro|falhou|falha|não foi possível|inválido|negado|tente novamente/i, /\bnão\b/i],
+        it: [/successo|salvato|creato|aggiornato|inviato|grazie/i, /errore|fallito|impossibile|non valido|negato|riprova/i, /\bnon\b/i],
+        bg: [/успешно|запазен|създаден|обновен|изпратен|благодарим/i, /грешка|неуспешн|невалид|отказан|опитайте отново/i, /(^|\s)(не|няма)(\s|$)/i],
+    };
+    /** the tone and where it came from: "class" (classes, data attributes) is strong evidence, "words" is weak */
+    const toneOf = (el, text) => {
+        const cls = `${typeof el.className === 'string' ? el.className : ''} ${el.getAttribute('data-type') || ''} ${el.getAttribute('data-variant') || ''} ${el.getAttribute('data-severity') || ''} ${el.getAttribute('data-status') || ''}`;
+        if (/error|danger|fail|negative|critical|invalid/i.test(cls))
+            return { tone: 'error', by: 'class' };
+        if (/success|positive/i.test(cls))
+            return { tone: 'success', by: 'class' };
+        if (/warn/i.test(cls))
+            return { tone: 'warning', by: 'class' };
+        const loc = LOCAL[lang];
+        let ok = OK_EN.test(text) || (!!loc && loc[0].test(text));
+        let bad = BAD_EN.test(text) || (!!loc && loc[1].test(text));
+        if (ok && (NEG_EN.test(text) || (!!loc && loc[2].test(text)))) {
+            ok = false;
+            bad = true;
+        }
+        return { tone: ok && bad ? 'mixed' : ok ? 'success' : bad ? 'error' : '', by: 'words' };
+    };
     let seq = 0;
     const ids = new WeakMap();
     const idOf = (el) => { let id = ids.get(el); if (!id) {
@@ -39,6 +84,7 @@ export function probeInit() {
     const win = {
         mutations: 0, texts: [], messages: new Map(),
         invalid: [], marked: 0, click: undefined, scrolled: false, images: [],
+        toned: [],
     };
     const groups = new Set();
     const addText = (t) => { if (t && win.texts.length < 10 && !win.texts.includes(t))
@@ -49,7 +95,7 @@ export function probeInit() {
             return;
         const id = idOf(el);
         if (win.messages.size < 20 || win.messages.has(id))
-            win.messages.set(id, { kind: kindOf(el), text });
+            win.messages.set(id, { kind: kindOf(el), text, ...toneOf(el, text) });
         track(id, el, text, rendered(el));
     };
     new MutationObserver((records) => {
@@ -153,7 +199,7 @@ export function probeInit() {
                 const before = tracked.get(id);
                 if (!before || before.text !== m.text) {
                     if (win.messages.size < 20)
-                        win.messages.set(id, { kind: kindOf(m.el), text: m.text });
+                        win.messages.set(id, { kind: kindOf(m.el), text: m.text, ...toneOf(m.el, m.text) });
                 }
                 track(id, m.el, m.text, true);
             }
@@ -174,16 +220,32 @@ export function probeInit() {
                 if (el.textContent?.trim() && shown(el))
                     noteEls.add(el);
             }
-            for (const el of noteEls)
-                if (!notes.has(el))
-                    addText(clip(el.textContent || '', 60));
+            for (const el of noteEls) {
+                if (notes.has(el))
+                    continue;
+                const text = clip(el.textContent || '', 60);
+                addText(text);
+                const { tone, by } = toneOf(el, text);
+                if (tone && win.toned.length < 6)
+                    win.toned.push({ tone, text, by });
+            }
             notes = noteEls;
+            // progress indicators visible now (a spinner that never goes away is a finding only when it outlives its requests)
+            const busy = [];
+            const b = document.querySelectorAll(BUSY);
+            for (let i = 0; i < b.length && i < 300 && busy.length < 10; i++) {
+                const el = b[i];
+                if (el.tagName !== 'IMG' && el !== document.body && el !== document.documentElement && isBusy(el) && shown(el))
+                    busy.push(idOf(el));
+            }
             const s = state();
             const changed = lastState !== undefined && s !== lastState;
             lastState = s;
             const out = {
                 mutations: win.mutations, texts: win.texts, invalid: win.invalid, marked: win.marked, click: win.click, scrolled: win.scrolled, images: win.images,
-                messages: Array.from(win.messages, ([id, m]) => ({ id, kind: m.kind, text: m.text })), gone, changed,
+                messages: Array.from(win.messages, ([id, m]) => (m.tone ? { id, kind: m.kind, text: m.text, tone: m.tone, by: m.by } : { id, kind: m.kind, text: m.text })), gone, changed,
+                ...(win.toned.length ? { toned: win.toned } : {}),
+                ...(busy.length ? { busy } : {}),
             };
             win.mutations = 0;
             win.texts = [];
@@ -193,6 +255,7 @@ export function probeInit() {
             win.click = undefined;
             win.scrolled = false;
             win.images = [];
+            win.toned = [];
             groups.clear();
             return out;
         },
@@ -214,5 +277,7 @@ export function mergeProbes(parts) {
         click: got.find((p) => p.click)?.click,
         scrolled: got.some((p) => p.scrolled),
         images: got.flatMap((p) => p.images),
+        ...(got.some((p) => p.toned?.length) ? { toned: got.flatMap((p) => p.toned ?? []).slice(0, 6) } : {}),
+        ...(got.some((p) => p.busy?.length) ? { busy: [...new Set(got.flatMap((p) => p.busy ?? []))].slice(0, 20) } : {}),
     };
 }

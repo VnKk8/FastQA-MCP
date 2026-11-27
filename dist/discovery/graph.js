@@ -5,6 +5,7 @@ const LIMITS_NOTE = 'Observed browser activity only: routes, actions and first-p
 const JOURNEY_NOTE = 'Only actions with an observed navigation or first-party request appear. Order is the order in which they were first observed.';
 const MAX_SAMPLES = 3;
 const MAX_TRACKED_ACTIONS = 5000;
+export const BEHAVIOUR_CAPS = { routes: 200, fieldsPerRoute: 30, controlsPerRoute: 60 };
 const RANK = { direct: 3, inferred: 2, ambiguous: 1, unattributed: 0 };
 const weakest = (a, b) => (RANK[a] <= RANK[b] ? a : b);
 const attributed = (c) => c === 'direct' || c === 'inferred';
@@ -33,6 +34,77 @@ export class DiscoveryGraph {
     journeysTruncated = false;
     templates;
     now;
+    /** route key -> fields and controls the snapshots of that route showed (bounded) */
+    seen = new Map();
+    seenTruncated = false;
+    /** labels of this session (role, environment), set by the owner */
+    context;
+    /**
+     * What a snapshot of a page showed: its fields with the constraints they declare, and its controls. Called with the
+     * lines fastqa already has (CPU only, no page access). Values are never kept: only names, roles and constraints.
+     */
+    noteSnapshot(url, lines) {
+        let origin = '';
+        let pathname = '';
+        try {
+            const u = new URL(url);
+            origin = u.origin;
+            pathname = u.pathname;
+        }
+        catch {
+            return;
+        }
+        if (!/^https?:/.test(origin))
+            return;
+        const key = `${origin}${normalizePath(pathname, this.templates)}`;
+        let s = this.seen.get(key);
+        if (!s) {
+            if (this.seen.size >= BEHAVIOUR_CAPS.routes) {
+                this.seenTruncated = true;
+                return;
+            }
+            s = { fields: new Map(), controls: new Set() };
+            this.seen.set(key, s);
+        }
+        for (const l of lines) {
+            const m = /^\s*e\d+ (\S+)(?: "((?:[^"\\]|\\.)*)")?(.*)$/.exec(l);
+            if (!m || !m[2])
+                continue;
+            let name = m[2];
+            try {
+                name = JSON.parse(`"${m[2]}"`);
+            }
+            catch { /* keep as shown */ }
+            const role = m[1];
+            if (/^(textbox|searchbox|combobox|listbox|checkbox|radio|switch|slider|file)$/.test(role)) {
+                if (s.fields.has(`${role}|${name}`))
+                    continue;
+                if (s.fields.size >= BEHAVIOUR_CAPS.fieldsPerRoute) {
+                    this.seenTruncated = true;
+                    continue;
+                }
+                // constraint tokens only (required, type, lengths, limits, pattern, accept); never the value (=…) or options: the
+                // value token is removed first, so text typed into a field ("type:pdf acme") can never pass for a constraint
+                const rest = m[3].replace(/(^| )=("(?:[^"\\]|\\.)*"|\S+)/g, ' ').replace(/(^| )options:.*?(?= \[|$)/, ' ');
+                const constraints = (rest.match(/(?:^| )(\[(required|disabled|multiple)\]|(type|maxlength|minlength|min|max|step|pattern|accept):("(?:[^"\\]|\\.)*"|\S+))/g) ?? []).map((c) => c.trim()).slice(0, 8);
+                s.fields.set(`${role}|${name}`, { name: cleanLabel(name).slice(0, 60), role, constraints });
+            }
+            else if (/^(button|link|tab|menuitem|option)$/.test(role)) {
+                if (s.controls.size >= BEHAVIOUR_CAPS.controlsPerRoute) {
+                    this.seenTruncated = true;
+                    continue;
+                }
+                s.controls.add(`${role} ${JSON.stringify(cleanLabel(name).slice(0, 60))}`);
+            }
+        }
+    }
+    behaviour() {
+        return {
+            version: 1, truncated: this.seenTruncated,
+            // routes by their stable key (origin + normalized path), so merging needs no id mapping
+            routes: [...this.seen].map(([k, s]) => ({ route: k, fields: [...s.fields.values()], controls: [...s.controls] })),
+        };
+    }
     constructor(o) {
         this.o = o;
         this.templates = o.pathTemplates ?? [];
@@ -179,7 +251,7 @@ export class DiscoveryGraph {
                 if (this.actions.size >= DISCOVERY_CAPS.actions)
                     this.dropped.actions++;
                 else {
-                    node = { id: `AC${++this.nAction}`, route: on?.id, label, kind: info.kind, scopes: [], count: 0 };
+                    node = { id: `AC${++this.nAction}`, route: on?.id, label, kind: info.kind, scopes: [], count: 0, ...(info.control ? { control: cleanLabel(info.control).slice(0, 60) } : {}) };
                     this.actions.set(key, node);
                 }
             }
@@ -243,6 +315,8 @@ export class DiscoveryGraph {
             routes: [...this.routes.values()], endpoints: [...this.endpoints.values()], actions: [...this.actions.values()], edges: [...this.edges.values()],
             thirdPartyRequests: this.thirdParty,
             truncated: d.routes + d.endpoints + d.actions + d.edges > 0, dropped: { ...d },
+            ...(this.context && (this.context.role || this.context.env) ? { context: this.context } : {}),
+            ...(this.seen.size ? { behaviour: this.behaviour() } : {}),
         }));
     }
     journeys() {
@@ -271,10 +345,20 @@ export function mergeDiscovery(exports) {
     let generatedAt = '';
     const min = (a, b) => (a && (!b || a < b) ? a : b);
     const max = (a, b) => (a > b ? a : b);
+    const seenBehaviour = new Map();
+    let behaviourTruncated = false;
+    let skipped = 0;
     for (const d of exports) {
         if (!d || d.schemaVersion !== 1)
             continue;
-        for (const s of d.sessions ?? [])
+        // idempotent: an export whose sessions are all merged already (the same bundle twice, or a merged file plus its
+        // sources) adds nothing; counts are never summed twice for one session
+        const own = d.sessions ?? [];
+        if (own.length && own.every((s) => sessions.includes(s))) {
+            skipped++;
+            continue;
+        }
+        for (const s of own)
             if (!sessions.includes(s))
                 sessions.push(s);
         // ids of a single-session export are local to it; ids of an already merged export are prefixed already
@@ -287,8 +371,12 @@ export function mergeDiscovery(exports) {
         for (const k of ['routes', 'endpoints', 'actions', 'edges'])
             dropped[k] += d.dropped?.[k] ?? 0;
         const local = new Map(); // id in this export -> stable key
+        // another role or environment is another product surface: its nodes are kept apart, never united by path
+        const context = d.context && (d.context.role || d.context.env) ? `role ${d.context.role || '-'}, env ${d.context.env || '-'}` : undefined;
+        const cx = (k) => (context ? `[${context}] ${k}` : k);
+        const tagged = (n, c) => (c ? { ...n, context: c } : n);
         for (const r of d.routes ?? []) {
-            const key = `${r.origin}${r.path}`;
+            const key = cx(`${r.origin}${r.path}`);
             local.set(r.id, `route:${key}`);
             let m = routes.get(key);
             if (!m) {
@@ -296,7 +384,7 @@ export function mergeDiscovery(exports) {
                     dropped.routes++;
                     continue;
                 }
-                m = { id: '', origin: r.origin, path: r.path, count: 0, firstSeen: r.firstSeen, lastSeen: r.lastSeen, evidenceIds: [] };
+                m = tagged({ id: '', origin: r.origin, path: r.path, count: 0, firstSeen: r.firstSeen, lastSeen: r.lastSeen, evidenceIds: [] }, context ?? r.context);
                 routes.set(key, m);
             }
             m.count += r.count;
@@ -304,8 +392,31 @@ export function mergeDiscovery(exports) {
             m.lastSeen = max(m.lastSeen, r.lastSeen);
             samples(m.evidenceIds, r.evidenceIds);
         }
+        for (const b of d.behaviour?.routes ?? []) {
+            const key = cx(b.route);
+            let m = seenBehaviour.get(key);
+            if (!m) {
+                if (seenBehaviour.size >= BEHAVIOUR_CAPS.routes) {
+                    behaviourTruncated = true;
+                    continue;
+                }
+                m = { route: b.route, context, fields: new Map(), controls: new Set() };
+                seenBehaviour.set(key, m);
+            }
+            for (const f of b.fields ?? [])
+                if (m.fields.size < BEHAVIOUR_CAPS.fieldsPerRoute)
+                    m.fields.set(`${f.role}|${f.name}`, f);
+                else
+                    behaviourTruncated = true;
+            for (const c of b.controls ?? [])
+                if (m.controls.size < BEHAVIOUR_CAPS.controlsPerRoute)
+                    m.controls.add(c);
+                else
+                    behaviourTruncated = true;
+            behaviourTruncated ||= !!d.behaviour?.truncated;
+        }
         for (const e of d.endpoints ?? []) {
-            const key = `${e.method} ${e.origin}${e.path}`;
+            const key = cx(`${e.method} ${e.origin}${e.path}`);
             local.set(e.id, `endpoint:${key}`);
             let m = endpoints.get(key);
             if (!m) {
@@ -313,7 +424,7 @@ export function mergeDiscovery(exports) {
                     dropped.endpoints++;
                     continue;
                 }
-                m = { id: '', method: e.method, origin: e.origin, path: e.path, statuses: [], contentTypes: [], count: 0, background: 0, failed: 0, firstSeen: e.firstSeen, lastSeen: e.lastSeen, evidenceIds: [] };
+                m = tagged({ id: '', method: e.method, origin: e.origin, path: e.path, statuses: [], contentTypes: [], count: 0, background: 0, failed: 0, firstSeen: e.firstSeen, lastSeen: e.lastSeen, evidenceIds: [] }, context ?? e.context);
                 endpoints.set(key, m);
             }
             m.count += e.count;
@@ -338,7 +449,7 @@ export function mergeDiscovery(exports) {
         }
         for (const a of d.actions ?? []) {
             const routeKey = a.route ? local.get(a.route) : undefined;
-            const key = `${routeKey ?? ''}|${a.label}`;
+            const key = cx(`${routeKey ?? ''}|${a.label}`);
             local.set(a.id, `action:${key}`);
             let m = actions.get(key);
             if (!m) {
@@ -346,7 +457,7 @@ export function mergeDiscovery(exports) {
                     dropped.actions++;
                     continue;
                 }
-                m = { id: '', route: routeKey, label: a.label, kind: a.kind, scopes: [], count: 0 };
+                m = tagged({ id: '', route: routeKey, label: a.label, kind: a.kind, scopes: [], count: 0, ...(a.control ? { control: a.control } : {}) }, context ?? a.context);
                 actions.set(key, m); // route holds the stable key until ids are assigned
             }
             m.count += a.count;
@@ -414,10 +525,16 @@ export function mergeDiscovery(exports) {
         outEdges.push({ ...e, from, to, ...(via?.length ? { via } : { via: undefined }) });
     }
     truncated ||= dropped.routes + dropped.endpoints + dropped.actions + dropped.edges > 0;
+    const behaviour = seenBehaviour.size ? {
+        version: 1, truncated: behaviourTruncated,
+        routes: [...seenBehaviour.values()].map((b) => ({ route: b.context ? `[${b.context}] ${b.route}` : b.route, fields: [...b.fields.values()], controls: [...b.controls] })),
+    } : undefined;
     return JSON.parse(JSON.stringify({
         schemaVersion: 1, kind: 'fastqa-discovery', sessions, generatedAt, limits: LIMITS_NOTE,
         routes: [...routes.values()], endpoints: [...endpoints.values()], actions: [...actions.values()], edges: outEdges,
         thirdPartyRequests: thirdParty, truncated, dropped,
+        ...(behaviour ? { behaviour } : {}),
+        ...(skipped ? { mergeNote: `${skipped} export(s) skipped: their sessions were merged already` } : {}),
     }));
 }
 // ---------------------------------------------------------------------------------------------------- text view
@@ -454,6 +571,60 @@ export function renderDiscovery(d, opts = {}) {
         return parts.length ? ` · fields: ${parts.join(' | ')}` : '';
     };
     const dropped = d.dropped.routes + d.dropped.endpoints + d.dropped.actions + d.dropped.edges;
+    // behaviour summaries: what the actions were seen to call, the constraints pages declared, what failed, and controls
+    // that were shown but never used. All observed only; nothing here is a claim about unvisited functionality.
+    const byAction = new Map();
+    const epById = new Map(d.endpoints.map((x) => [x.id, x]));
+    for (const e of d.edges)
+        if (e.relation === 'triggers') {
+            const ep = epById.get(e.to);
+            if (ep && (!f || ep.path.includes(f)))
+                byAction.set(e.from, [...(byAction.get(e.from) ?? []), `${ep.method} ${at(ep.origin, ep.path)} → ${ep.statuses.join(',') || '…'}${e.confidence === 'inferred' ? '' : ` (${e.confidence})`}`]);
+        }
+    const perAction = d.actions.filter((a) => byAction.has(a.id)).map((a) => `${a.id} ${a.label}${a.context ? ` [${a.context}]` : ''}: ${byAction.get(a.id).slice(0, 4).join(' · ')}`);
+    const routeKey = new Map(d.routes.map((r) => [r.id, `${r.origin}${r.path}`]));
+    const fields = (d.behaviour?.routes ?? []).filter((b) => !f || b.route.includes(f)).flatMap((b) => b.fields.filter((x) => x.constraints.length).map((x) => `${shortRoute(b.route, single)} · ${x.role} ${JSON.stringify(x.name)}: ${x.constraints.join(' ')}`));
+    const failing = d.endpoints.filter((e) => (!f || e.path.includes(f)) && (e.failed || e.statuses.some((s) => s >= 400))).map((e) => `${e.method} ${at(e.origin, e.path)} → ${e.statuses.filter((s) => s >= 400).join(',') || ''}${e.failed ? `${e.statuses.some((s) => s >= 400) ? ', ' : ''}${e.failed} failed` : ''}`);
+    const acted = new Map();
+    for (const a of d.actions) {
+        const m = /^\w+ "((?:[^"\\]|\\.)*)"/.exec(a.label);
+        const rk = a.route ? routeKey.get(a.route) : undefined;
+        if (!rk)
+            continue;
+        const set = acted.get(rk) ?? new Set();
+        if (m) {
+            try {
+                set.add(JSON.parse(`"${m[1]}"`).toLowerCase());
+            }
+            catch {
+                set.add(m[1].toLowerCase());
+            }
+        }
+        if (a.control)
+            set.add(a.control.toLowerCase()); // an action on a ref: matched by the control's name
+        acted.set(rk, set);
+    }
+    const gaps = (d.behaviour?.routes ?? []).filter((b) => !f || b.route.includes(f)).flatMap((b) => {
+        const used = acted.get(b.route.replace(/^\[[^\]]*\] /, '')) ?? new Set();
+        const left = b.controls.filter((c) => {
+            const raw = /"((?:[^"\\]|\\.)*)"/.exec(c)?.[1] ?? '';
+            let n = raw;
+            try {
+                n = JSON.parse(`"${raw}"`);
+            }
+            catch { /* keep as shown */ }
+            return !!n && !used.has(n.toLowerCase());
+        });
+        return left.length ? [`${shortRoute(b.route, single)}: ${left.slice(0, 8).join(', ')}${left.length > 8 ? ` +${left.length - 8} more` : ''}`] : [];
+    });
+    // these sections say nothing when they have nothing: no "none" lines
+    const some = (title, items) => (items.length ? section(title, items, (x) => x) : []);
+    const behaviourLines = [
+        ...some('observed endpoints per action (association by timing unless marked)', perAction),
+        ...some('known field constraints (declared in the page: client side; backend enforcement not verified)', fields),
+        ...some('unverified: endpoints seen failing (leads, see findings)', failing),
+        ...some('shown but not exercised (controls seen in snapshots that no action used, matched by name)', gaps),
+    ];
     return [
         `discovery: observed activity of ${d.sessions.length} session(s) ${d.sessions.slice(0, 4).join(', ')}${d.sessions.length > 4 ? ', …' : ''} — what was seen, not coverage of what was not`,
         `${d.routes.length} routes · ${d.endpoints.length} endpoints · ${d.actions.length} actions · ${d.edges.length} edges · ${d.thirdPartyRequests} third-party requests (not listed)${d.truncated ? ` · truncated: ${dropped} items over the caps were dropped` : ''}`,
@@ -461,5 +632,12 @@ export function renderDiscovery(d, opts = {}) {
         ...section('routes', routes, (r) => `${r.id} ${at(r.origin, r.path)} ×${r.count}`),
         ...section('endpoints', endpoints, (e) => `${e.id} ${e.method} ${at(e.origin, e.path)} → ${e.statuses.join(',') || 'no response'} ×${e.count}${e.background ? ` (${e.background} without an action: background or unknown)` : ''}${e.failed ? ` (${e.failed} failed)` : ''}${shapes(e)}`),
         ...section('edges', edges, (e) => `${name.get(e.from) ?? e.from} → ${name.get(e.to) ?? e.to} · ${e.relation} ×${e.count} (${e.confidence})${e.via?.length ? ` via ${e.via.map((v) => name.get(v) ?? v).join(', ')}` : ''}${e.evidenceIds.length ? ` · ${e.evidenceIds.join(',')}` : ''}`),
+        ...behaviourLines,
+        d.behaviour?.truncated ? 'behaviour: truncated at its caps (routes, fields or controls per route)' : '',
     ].filter(Boolean).join('\n');
+}
+/** A behaviour route key ("[context] origin/path") shown short: the path alone when there is one origin. */
+function shortRoute(key, single) {
+    const m = /^(\[[^\]]*\] )?(https?:\/\/[^/]+)(.*)$/.exec(key);
+    return m ? `${m[1] ?? ''}${single ? m[3] || '/' : m[2] + m[3]}` : key;
 }

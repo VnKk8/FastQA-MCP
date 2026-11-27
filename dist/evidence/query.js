@@ -1,6 +1,7 @@
 import { SEVERITIES } from '../observation/types.js';
 import { byImportance } from '../quality/engine.js';
 import { describeConfig } from '../config.js';
+import { explainFinding } from '../quality/summary.js';
 const enc = (view, offset) => Buffer.from(JSON.stringify({ v: view, o: offset })).toString('base64url');
 function offsetOf(view, cursor) {
     if (!cursor)
@@ -49,6 +50,8 @@ export function findingDetail(obs, f, withPayload) {
         `  association: ${obs.actions.describe(f.association)} — ${f.association.reason}`,
         `  first seen ${f.firstAt}${f.batchId ? ` in ${f.batchId}` : ''}${f.scope ? ` (scope ${f.scope})` : ''}`,
     ];
+    const why = explainFinding(obs, f);
+    out.push(`  what it may mean: ${why.impact}`, `  safe next check: ${why.next}`);
     if (f.evidenceIds.length) {
         out.push('  events:');
         for (const id of f.evidenceIds.slice(0, 8)) {

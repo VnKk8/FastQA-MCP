@@ -6,6 +6,8 @@ import { redactor } from './privacy/redact.js';
 import { FLOW_DIR } from './dirs.js';
 import { madeDir, removeMadeDirs } from './upload.js';
 import { probeInit, mergeProbes, type ProbeData } from './probe.js';
+import { oneLine } from './util/text.js';
+import type { PermissionCheck } from './permissions.js';
 
 export type Intent = 'click' | 'fill' | 'any';
 
@@ -16,6 +18,30 @@ export interface Step {
   timeout?: number;
   /** restrict to an iframe: its title/name/id/src fragment, or a selector chain recorded by fastqa */
   frame?: string | string[];
+  /** restrict to a container: a ref, a selector, or the text of its row / card / section. A hard limit, never widened. */
+  within?: string;
+  /** recorded identity of the element (role and accessible name), checked on replay when the recorded selector is positional */
+  id?: Identity;
+}
+
+/** Who an element is, as the snapshot showed it: role and accessible name. Never a value the person typed. */
+export interface Identity { role: string; name: string }
+
+/** Containers a text-based `within` can mean: a table row, a list item, a card, a section, a form, a dialog. */
+export const CONTAINERS = 'tr,[role=row],li,[role=listitem],article,[role=article],section,fieldset,form,[role=region],[role=group],dialog,[role=dialog],[class*=card],[class*=Card]';
+
+/**
+ * Labels of actions that change or remove something: when one of these matches several elements, fastqa does not pick
+ * one (even without strict mode). The list is a guard, not a guarantee: a destructive button with another label is
+ * protected only by strict mode, a ref or `within`.
+ */
+export const DESTRUCTIVE = /\b(delete|remove|destroy|discard|erase|purge|wipe|revoke|terminate|deactivate|unsubscribe|ban|archive|reset|pay|pay now|purchase|buy now|place order|checkout|confirm|submit|send|transfer|withdraw|refund|approve|reject|publish|cancel (?:order|subscription|booking|account|plan))\b|löschen|entfernen|supprimer|eliminar|excluir|elimina|изтрий|премахни/i;
+
+/** Role and name from a snapshot line: `e12 button "Delete"`. */
+export function identityOf(line: string): Identity | undefined {
+  const m = /^\s*e\d+ (\S+)(?: "((?:[^"\\]|\\.)*)")?/.exec(line);
+  if (!m || !m[2]) return undefined;
+  try { return { role: m[1], name: JSON.parse(`"${m[2]}"`) }; } catch { return undefined; }
 }
 
 export interface RecordedStep extends Step {
@@ -65,7 +91,7 @@ export class Session {
   page?: Page;
   /** last snapshot lines (for diffs) and ref -> selector hints (for stale refs + recording) */
   lastLines: string[] = [];
-  hints = new Map<string, { hint: string; code?: string; frame?: string[]; gen?: number }>();
+  hints = new Map<string, { hint: string; code?: string; frame?: string[]; gen?: number; id?: Identity }>();
   /** strict locators for the running batch (act strict:true); falls back to locator.strict from the config */
   strictNow?: boolean;
   tape: RecordedStep[] = [];
@@ -83,7 +109,12 @@ export class Session {
   /** explicit run option (CLI --mode, flow run mode); overrides the config file */
   mode?: Mode;
   /** per-run options that services read (CLI --bundle, --baseline) */
-  options: { bundle?: boolean; baseline?: 'record' | 'check' } = {};
+  options: { bundle?: boolean; baseline?: 'record' | 'check'; env?: string } = {};
+  /** the role label the caller gave this run (flow "role", CLI --role); never inferred from credentials */
+  role?: string;
+  /** expect_permission results of this session, for the permission matrix (bounded) */
+  permissions: PermissionCheck[] = [];
+  notePermission(c: PermissionCheck) { if (this.permissions.length < 200) this.permissions.push(c); }
   /** called when a session ends (context closed), before the observer is replaced */
   onEnd?: (obs: Observer) => Promise<void> | void;
   /** origins whose cookie banner was already looked for in this context (see the cookies step) */
@@ -105,6 +136,9 @@ export class Session {
     if (this.log.length > 2000) this.log.splice(0, 500);
   }
   since(t: number) { return this.log.filter((e) => e.t >= t); }
+
+  /** Starts the browser process only (no context): parallel flow workers share it, each with a context of its own. */
+  async startBrowser() { if (!this.browser) this.browser = await launch(); }
 
   /** device: a Playwright device name such as "iPhone 13" or "Pixel 7"; switching device opens a new context. */
   async ensure(fresh = false, device?: string): Promise<Page> {
@@ -227,11 +261,25 @@ export class Session {
     });
   }
 
+  /**
+   * browser.allowedOrigins is documented as "open / goto only to these origins". The same limit applies to where a click,
+   * a redirect or a popup takes a page: the first main-frame navigation to another origin is remembered here and the
+   * running step fails (see runBatch). It is checked after the navigation happened: a restriction, not a network sandbox.
+   */
+  private leftTo?: string;
+  takeLeftOrigin(): string | undefined { const u = this.leftTo; this.leftTo = undefined; return u; }
+  private checkOrigin(url: string) {
+    const allowed = this.cfg?.browser.allowedOrigins ?? [];
+    if (!allowed.length || this.leftTo || !/^https?:/i.test(url)) return; // about:blank, data:, chrome-error: are not origins
+    let o = ''; try { o = new URL(url).origin; } catch { return; }
+    if (!allowed.includes(o)) this.leftTo = redactor.pageUrl(url);
+  }
+
   private attachedPages = new WeakSet<Page>();
   private attachPage(page: Page) {
     if (this.attachedPages.has(page)) return;
     this.attachedPages.add(page);
-    const nav = (f: Frame) => { if (f === page.mainFrame()) this.docGen++; this.obs.onNavigated(page, f); };
+    const nav = (f: Frame) => { if (f === page.mainFrame()) { this.docGen++; this.checkOrigin(f.url()); } this.obs.onNavigated(page, f); };
     const closed = () => {
       this.obs.onPage(page, 'page_closed');
       // its open requests will never finish: stop waiting for them
@@ -268,7 +316,7 @@ export class Session {
       await (maxMs === undefined ? closing : within(closing, maxMs));
     }
     this.context = undefined; this.page = undefined; this.inflight = 0; this.pending.clear(); this.loading.clear();
-    this.lastLines = []; this.hints.clear(); this.consentAsked.clear(); this.events = [];
+    this.lastLines = []; this.hints.clear(); this.consentAsked.clear(); this.events = []; this.leftTo = undefined;
     await removeMadeDirs(this.madeDirs.splice(0));
   }
 
@@ -330,7 +378,7 @@ export class Session {
         } catch { /* frame navigated or detached mid-snapshot */ }
       }
     }
-    for (const it of items) if (it.ref && it.hint) this.hints.set(it.ref, { hint: it.hint, code: it.code, frame: it.frame, gen: this.docGen });
+    for (const it of items) if (it.ref && it.hint) this.hints.set(it.ref, { hint: it.hint, code: it.code, frame: it.frame, gen: this.docGen, id: identityOf(it.line) });
     return { items, truncated, url: res.url, title: res.title, page: res.page };
   }
 
@@ -419,51 +467,176 @@ export class Session {
    *  - "testid=x"            -> getByTestId
    *  - anything else         -> semantic: label / placeholder / role+name / text, chosen by intent
    */
-  async resolve(target: string, intent: Intent, timeout = DEFAULT_TIMEOUT, frame?: string | string[]):
-    Promise<{ loc: Locator; record: string; code: string; frame?: string[] }> {
+  async resolve(target: string, intent: Intent, timeout = DEFAULT_TIMEOUT, frame?: string | string[], o: { within?: string; identity?: Identity } = {}):
+    Promise<{ loc: Locator; record: string; code: string; frame?: string[]; identity?: Identity; within?: string }> {
     const t = target.trim();
     const strict = this.strictNow ?? this.cfg?.strictLocators ?? false;
     const fr = (c?: string[]) => (c && c.length ? c : undefined);
+    const within = o.within?.trim() || undefined;
     if (/^e\d+$/.test(t)) {
-      const h = this.hints.get(t);
-      const sc = this.scope(h?.frame);
-      const byRef = sc.locator(`[data-fq="${t}"]`);
-      const pre = Session.codePrefix(h?.frame);
-      if (await byRef.count()) {
-        return { loc: byRef.first(), record: h?.hint ?? `[data-fq="${t}"]`, code: (h?.code ?? `page.locator('[data-fq="${t}"]')`).replace(/^page/, pre), frame: fr(h?.frame) };
+      const r = await this.resolveRef(t, strict);
+      if (within) {
+        // a ref is exact, but `within` is still a hard limit: a ref outside the container is refused, never widened
+        const box = this.box(this.scope(r.frame), within, undefined);
+        if (!(await box.loc.locator(`[data-fq="${t}"]`).count().catch(() => 0)) && !(await box.loc.and(this.page!.locator(`[data-fq="${t}"]`)).count().catch(() => 0))) {
+          throw new Error(`Not executed: ref ${t} is not inside ${JSON.stringify(within)}. Take a snapshot and use a ref from that container`);
+        }
+        return { ...r, within: box.record };
       }
-      if (!h) throw new Error(`Unknown ref ${t}. Take a snapshot first.`);
-      if (strict) {
-        // The stamped element is gone. Falling back to its recorded selector is only safe when that is still unambiguous.
-        if (h.gen !== undefined && h.gen !== this.docGen) throw new Error(`Stale ref ${t}: the page navigated after it was issued. Take a snapshot and use a current ref.`);
-        const n = await sc.locator(h.hint).count().catch(() => 0);
-        if (n !== 1) throw new Error(`Stale ref ${t}: its element is gone and the recorded selector now matches ${n} elements. Take a snapshot and use a current ref.`);
-      }
-      return { loc: sc.locator(h.hint).first(), record: h.hint, code: (h.code ?? `page.locator(${JSON.stringify(h.hint)})`).replace(/^page/, pre), frame: fr(h.frame) };
+      return r;
     }
     const deadline = Date.now() + timeout;
     let scopes = await this.scopesFor(frame);
+    // a container given as a ref lives in one frame: only that frame is searched
+    const wHint = within && /^e\d+$/.test(within) ? this.hints.get(within) : undefined;
+    if (within && /^e\d+$/.test(within)) {
+      if (!wHint) throw new Error(`Unknown ref ${within} in within. Take a snapshot first.`);
+      scopes = [wHint.frame ?? []];
+    }
+    const raw = RAW_SELECTOR.test(t);
+    // a destructive label that matches several elements is never guessed (strict mode or not)
+    const guard = !raw && intent === 'click' && DESTRUCTIVE.test(t);
     let polls = 0;
     do {
       // pass 1: exact matches in every scope; pass 2: fuzzy. So an exact button in an iframe beats loose text in the page.
       for (const exactPass of [true, false]) for (const chain of scopes) {
         const sc = this.scope(chain);
         const pre = Session.codePrefix(chain);
-        for (const [loc, code] of this.candidates(sc, t, intent).filter((c) => /exact: true|getByTestId|page\.locator/.test(c[1]) === exactPass)) {
-          const v = loc.filter({ visible: true });
+        const base = this.candidates(sc, t, intent);
+        for (let k = 0; k < base.length; k++) {
+          if (/exact: true|getByTestId|page\.locator/.test(base[k][1]) !== exactPass) continue;
+          const found = within ? this.inside(sc, pre, within, t, intent, k) : { loc: base[k][0], code: pre + base[k][1].slice(4), record: undefined };
+          const v = found.loc.filter({ visible: true });
           const n = await v.count().catch(() => 0);
-          if (n > 0) {
-            // Strict mode never picks one of several matches: it reports the candidates and lets the caller choose a ref.
-            if (n > 1 && strict) throw new AmbiguousTargetError(await this.describeAmbiguous(v, n, t, chain));
-            const raw = !/^(testid=|css=|xpath=|role=|text=|#|\[|\.|\/\/)/.test(t) ? `${code}.first()` : code;
-            return { loc: v.first(), record: t, code: raw.replace(/^page/, pre), frame: fr(chain) };
+          if (!n) continue;
+          // Strict mode never picks one of several matches: it reports the candidates and lets the caller choose a ref.
+          if (n > 1 && strict) throw new AmbiguousTargetError(await this.describeAmbiguous(v, n, t, chain));
+          if (n > 1 && guard) throw new AmbiguousTargetError(await this.describeAmbiguous(v, n, t, chain, within ? 'within' : 'guard'));
+          if ((strict || guard) && !within && scopes.length > 1) {
+            // the same control in another frame is a second candidate, found by the same strategy (counted in parallel)
+            const others = scopes.filter((other) => other !== chain);
+            const counts = await Promise.all(others.map((other) => {
+              const alt = this.candidates(this.scope(other), t, intent)[k];
+              return alt ? alt[0].filter({ visible: true }).count().catch(() => 0) : Promise.resolve(0);
+            }));
+            const elsewhere = others.filter((_, i) => counts[i] > 0).map((other) => (other.length ? `frame ${other.join(' >> ')}` : 'the page'));
+            if (elsewhere.length) {
+              throw new AmbiguousTargetError(`Not executed: "${t}" matches in ${elsewhere.length + 1} places (${chain.length ? `frame ${chain.join(' >> ')}` : 'the page'}, ${elsewhere.slice(0, 3).join(', ')}). Give frame, within or a ref`);
+            }
           }
+          // a step recorded from a ref carries the identity of its element: a positional selector that now finds another
+          // control (a different button in that place) is refused instead of acted on. One count, only for such steps.
+          if (o.identity) {
+            const idl = identityLocator(this.page!, o.identity, this.page!); // inside .and(): built from the page
+            if (idl && !(await v.first().and(idl).count().catch(() => 0))) {
+              throw new Error(`Not executed: ${JSON.stringify(t)} now finds an element that is not ${o.identity.role} ${JSON.stringify(o.identity.name)} (the page changed since this step was recorded)`);
+            }
+          }
+          const code = !raw ? `${found.code}.first()` : found.code;
+          return { loc: v.first(), record: t, code, frame: fr(chain), ...(found.record ? { within: found.record } : {}), ...(o.identity ? { identity: o.identity } : {}) };
         }
       }
       await sleep(100);
-      if (++polls % 5 === 0 && !Array.isArray(frame)) scopes = await this.scopesFor(frame); // frames may appear late
+      if (++polls % 5 === 0 && !Array.isArray(frame) && !wHint) scopes = await this.scopesFor(frame); // frames may appear late
     } while (Date.now() < deadline);
+    if (within) throw new Error(`No visible element matches "${t}" within ${JSON.stringify(within)}${frame ? ` in frame "${frame}"` : ''} (the container limits the search; it is never widened)`);
     throw new Error(`No visible element matches "${t}"${frame ? ` in frame "${frame}"` : ''} (tried ${intent === 'fill' ? 'label, placeholder, textbox' : 'role+name, label, text'} in page, shadow DOM and iframes)`);
+  }
+
+  /**
+   * A ref from a snapshot. When its element is gone (re-rendered, or the page navigated), the recorded selector is used only
+   * if it still finds exactly one element and that element is still the same control (role and name); otherwise the one
+   * visible element with that role and name. Anything else is refused: a stale ref never acts on a guess.
+   */
+  private async resolveRef(t: string, strict: boolean): Promise<{ loc: Locator; record: string; code: string; frame?: string[]; identity?: Identity }> {
+    const fr = (c?: string[]) => (c && c.length ? c : undefined);
+    const h = this.hints.get(t);
+    const sc = this.scope(h?.frame);
+    const byRef = sc.locator(`[data-fq="${t}"]`);
+    const pre = Session.codePrefix(h?.frame);
+    // the identity travels with a positional selector, so a replay can tell when another element took its place
+    const identity = h && positional(h.hint) ? h.id : undefined;
+    if (await byRef.count()) {
+      return { loc: byRef.first(), record: h?.hint ? recordOf(h.hint) : `[data-fq="${t}"]`, code: (h?.code ?? `page.locator('[data-fq="${t}"]')`).replace(/^page/, pre), frame: fr(h?.frame), ...(identity ? { identity } : {}) };
+    }
+    if (!h) throw new Error(`Unknown ref ${t}. Take a snapshot first.`);
+    if (strict && h.gen !== undefined && h.gen !== this.docGen) throw new Error(`Stale ref ${t}: the page navigated after it was issued. Take a snapshot and use a current ref.`);
+    const byHint = sc.locator(h.hint);
+    const n = await byHint.count().catch(() => 0);
+    // inside .and() the identity is built from the page (no frame chain allowed there); on its own, in the ref's frame
+    const idRel = h.id ? identityLocator(this.page!, h.id, this.page!) : undefined;
+    const idLoc = h.id ? identityLocator(sc, h.id, this.page!) : undefined;
+    const code = (h.code ?? `page.locator(${JSON.stringify(h.hint)})`).replace(/^page/, pre);
+    if (n === 1 && (!idRel || (await byHint.and(idRel).count().catch(() => 0)) === 1)) return { loc: byHint.first(), record: recordOf(h.hint), code, frame: fr(h.frame), ...(identity ? { identity } : {}) };
+    if (idLoc && !strict) {
+      const v = idLoc.filter({ visible: true });
+      if ((await v.count().catch(() => 0)) === 1) {
+        const sel = identitySelector(h.id!);
+        return { loc: v.first(), record: sel.record, code: pre + sel.code.slice(4), frame: fr(h.frame) };
+      }
+    }
+    const what = n === 1 && h.id ? `the element in its place is no longer ${h.id.role} ${JSON.stringify(h.id.name)}` : `the recorded selector now matches ${n} elements`;
+    throw new Error(`Stale ref ${t}: its element is gone and ${what}. Take a snapshot and use a current ref.`);
+  }
+
+  /**
+   * The container a `within` names: a ref, a selector, or the innermost row / card / section that shows the text. With a
+   * target (`inner`), the container must also hold a match, and it is refused when that match sits in another item (a
+   * row, list item, card or article that does not show the text): then the match belongs to another row, and the search
+   * fails instead of widening. Locators inside has / hasNot are built from the page: Playwright allows no frame chain
+   * there, and they are evaluated relative to the container anyway.
+   */
+  private box(sc: Page | FrameLocator, within: string, inner?: Locator): { loc: Locator; record: string } {
+    if (/^e\d+$/.test(within)) {
+      // recorded as a selector a replay reads as one (a positional hint would otherwise be taken as row text)
+      const h = this.hints.get(within);
+      return { loc: sc.locator(`[data-fq="${within}"]`), record: h?.hint ? recordOf(h.hint) : within };
+    }
+    if (/^testid=/.test(within)) return { loc: sc.getByTestId(within.slice(7)), record: within };
+    if (RAW_SELECTOR.test(within)) return { loc: sc.locator(within.replace(/^css=/, '')), record: within };
+    const P = this.page!;
+    const boxes = sc.locator(CONTAINERS).filter({ hasText: within });
+    const nested = P.locator(CONTAINERS).filter({ hasText: within });
+    if (!inner) return { loc: boxes.filter({ hasNot: nested }), record: within };
+    return {
+      loc: boxes.filter({ has: inner }).filter({ hasNot: nested.filter({ has: inner }) }).filter({ hasNot: P.locator(ITEMS).filter({ hasNotText: within }).filter({ has: inner }) }),
+      record: within,
+    };
+  }
+
+  /** The texts of the containers a `within` names, per frame (expect_text without a target). Empty: no such container. */
+  async withinTexts(within: string, frame?: string | string[]): Promise<Array<{ chain: string[]; text: string }>> {
+    const out: Array<{ chain: string[]; text: string }> = [];
+    for (const chain of await this.scopesFor(frame)) {
+      const texts = await this.box(this.scope(chain), within).loc.allInnerTexts().catch(() => [] as string[]);
+      for (const text of texts) out.push({ chain, text });
+    }
+    return out;
+  }
+
+  /**
+   * Target strategy k searched inside the container. For a text container that is the innermost row / card / section that
+   * shows the text and holds a match: "Delete" within "Invoice 1001" is the Delete of that row, not of the table.
+   * The code is the same composition, so replay and an exported spec search the same container.
+   */
+  private inside(sc: Page | FrameLocator, pre: string, within: string, t: string, intent: Intent, k: number): { loc: Locator; code: string; record: string } {
+    const q = JSON.stringify;
+    // the strategy inside has / hasNot comes from the page (relative to the container; no frame chain allowed there),
+    // in the code too: `page.getByRole(…)` inside a filter is valid for a frame's container
+    const [innerLoc, innerCode] = this.candidates(this.page!, t, intent)[k];
+    let boxCode: string;
+    const { loc: boxLoc, record } = this.box(sc, within, innerLoc);
+    if (/^e\d+$/.test(within)) boxCode = `${pre}.locator(${q(record.replace(/^css=/, ''))})`;
+    else if (/^testid=/.test(within)) boxCode = `${pre}.getByTestId(${q(within.slice(7))})`;
+    else if (RAW_SELECTOR.test(within)) boxCode = `${pre}.locator(${q(within.replace(/^css=/, ''))})`;
+    else {
+      const nested = `page.locator(${q(CONTAINERS)}).filter({ hasText: ${q(within)} })`;
+      boxCode = `${pre}.locator(${q(CONTAINERS)}).filter({ hasText: ${q(within)} }).filter({ has: ${innerCode} })` +
+        `.filter({ hasNot: ${nested}.filter({ has: ${innerCode} }) })` +
+        `.filter({ hasNot: page.locator(${q(ITEMS)}).filter({ hasNotText: ${q(within)} }).filter({ has: ${innerCode} }) })`;
+    }
+    const target = this.candidates(boxLoc, t, intent)[k];
+    return { loc: target[0], code: boxCode + target[1].slice(4), record };
   }
 
   /**
@@ -495,11 +668,13 @@ export class Session {
         for (const chain of scopes) {
           const sc = this.scope(chain); const pre = Session.codePrefix(chain);
           const file = sc.locator(FILE); const fileCode = `${pre}.locator(${q(FILE)})`;
+          // inside .and() the file-input filter is built from the page: Playwright allows no frame chain there
+          const rel = this.page!.locator(FILE); const relCode = `page.locator(${q(FILE)})`;
           const [loc, code]: [Locator, string] = !t ? [file, fileCode]
-            : /^testid=/.test(t) ? [sc.getByTestId(t.slice(7)).and(file), `${pre}.getByTestId(${q(t.slice(7))}).and(${fileCode})`]
-            : /^(css=|xpath=|#|\[|\.|\/\/)/.test(t) ? [sc.locator(t.replace(/^css=/, '')).and(file), `${pre}.locator(${q(t.replace(/^css=/, ''))}).and(${fileCode})`]
-            : exact ? [sc.getByLabel(t, { exact: true }).and(file), `${pre}.getByLabel(${q(t)}, { exact: true }).and(${fileCode})`]
-            : [sc.getByLabel(t).and(file), `${pre}.getByLabel(${q(t)}).and(${fileCode})`];
+            : /^testid=/.test(t) ? [sc.getByTestId(t.slice(7)).and(rel), `${pre}.getByTestId(${q(t.slice(7))}).and(${relCode})`]
+            : /^(css=|xpath=|#|\[|\.|\/\/)/.test(t) ? [sc.locator(t.replace(/^css=/, '')).and(rel), `${pre}.locator(${q(t.replace(/^css=/, ''))}).and(${relCode})`]
+            : exact ? [sc.getByLabel(t, { exact: true }).and(rel), `${pre}.getByLabel(${q(t)}, { exact: true }).and(${relCode})`]
+            : [sc.getByLabel(t).and(rel), `${pre}.getByLabel(${q(t)}).and(${relCode})`];
           const n = await loc.count().catch(() => 0);
           if (n) hits.push({ loc, code, chain, n });
         }
@@ -541,8 +716,11 @@ export class Session {
     }
   }
 
-  /** Stamps refs on the first matches and describes them compactly, so the caller can retry with an exact ref. */
-  private async describeAmbiguous(v: Locator, n: number, t: string, chain: string[]): Promise<string> {
+  /**
+   * Stamps refs on the first matches and describes them compactly, so the caller can retry with an exact ref.
+   * mode: strict (strict mode), guard (a destructive label without strict mode), within (still several inside the container).
+   */
+  private async describeAmbiguous(v: Locator, n: number, t: string, chain: string[], mode: 'strict' | 'guard' | 'within' = 'strict'): Promise<string> {
     let items: Array<{ ref: string; role: string; text: string; near: string; hint: string }> = [];
     try {
       items = await v.evaluateAll((els, base) => {
@@ -571,11 +749,14 @@ export class Session {
       this.refBase = Math.max(this.refBase, Number(it.ref.slice(1)) || 0);
       this.hints.set(it.ref, { hint: it.hint, code: `page.locator(${JSON.stringify(it.hint)})`, frame: chain.length ? chain : undefined, gen: this.docGen });
     }
-    const list = items.map((i) => `${i.ref} ${i.role} ${JSON.stringify(i.text)}${i.near && i.near !== i.text ? ` in ${JSON.stringify(i.near)}` : ''}`).join(' | ');
-    return `"${t}" matches ${n} elements and strict mode will not pick one. Use a ref: ${list}${n > items.length ? ` | … ${n - items.length} more` : ''}`;
+    const list = items.map((i) => `${i.ref} ${i.role} ${JSON.stringify(oneLine(i.text, 40))}${i.near && i.near !== i.text ? ` in ${JSON.stringify(oneLine(i.near, 60))}` : ''}`).join(' | ');
+    const more = n > items.length ? ` | … ${n - items.length} more` : '';
+    if (mode === 'guard') return `Not executed: "${t}" matches ${n} elements and fastqa does not guess the target of a destructive action. Use within or a ref: ${list}${more}`;
+    if (mode === 'within') return `Not executed: "${t}" still matches ${n} elements inside the container. Use a narrower within or a ref: ${list}${more}`;
+    return `"${t}" matches ${n} elements and strict mode will not pick one. Use a ref: ${list}${more}`;
   }
 
-  private candidates(sc: Page | FrameLocator, t: string, intent: Intent): Array<[Locator, string]> {
+  private candidates(sc: Page | FrameLocator | Locator, t: string, intent: Intent): Array<[Locator, string]> {
     if (/^testid=/.test(t)) { const id = t.slice(7); return [[sc.getByTestId(id), `page.getByTestId(${JSON.stringify(id)})`]]; }
     if (/^(css=|xpath=|role=|text=|#|\[|\.|\/\/)/.test(t)) {
       const sel = t.replace(/^css=/, '');
@@ -618,6 +799,37 @@ export class Session {
 
 function push(arr: string[], s: string) { if (arr.length < 50) arr.push(s.slice(0, 300)); }
 export const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/** Targets written as Playwright selectors (raw), as opposed to the text of a control (semantic). */
+const RAW_SELECTOR = /^(testid=|css=|xpath=|role=|text=|#|\[|\.|\/\/)/;
+/** Roles a role locator understands (the snapshot's own "file" is not one). */
+const ARIA_ROLES = new Set(['button', 'link', 'textbox', 'searchbox', 'checkbox', 'radio', 'switch', 'combobox', 'listbox', 'option', 'slider', 'spinbutton', 'tab', 'menuitem', 'heading', 'dialog']);
+/** A recorded selector that only says where an element was (nth-of-type path), not what it is. */
+const positional = (hint: string) => !/^(\[data-|#|role=)/.test(hint);
+/** A hint as a recorded target: a positional path gets css= so a replay reads it as a selector, not as text. */
+const recordOf = (hint: string) => (RAW_SELECTOR.test(hint) ? hint : `css=${hint}`);
+/** Rows of a list or table: an item a text-based `within` must not reach into when it does not show the text. */
+const ITEMS = 'tr,[role=row],li,[role=listitem],article,[role=article],[class*=card],[class*=Card]';
+/**
+ * Elements with this role and accessible name (the snapshot clips long names with "…": then a prefix match). `page`
+ * builds the part that goes inside .and(), where Playwright allows no frame chain.
+ */
+function identityLocator(sc: Page | FrameLocator, id: Identity, page: Page): Locator | undefined {
+  const clipped = id.name.endsWith('…');
+  const name = clipped ? id.name.slice(0, -1) : id.name;
+  if (!name) return undefined;
+  if (id.role === 'file') return sc.getByLabel(name, { exact: !clipped }).and(page.locator('input[type=file]'));
+  if (!ARIA_ROLES.has(id.role)) return undefined;
+  return sc.getByRole(id.role as any, { name, exact: !clipped });
+}
+/** The same identity as a replayable selector and as export code. */
+function identitySelector(id: Identity): { record: string; code: string } {
+  const q = JSON.stringify;
+  const clipped = id.name.endsWith('…');
+  const name = clipped ? id.name.slice(0, -1) : id.name;
+  // the same form as the snapshot's own role hints (role=…[name="…"])
+  return { record: `role=${id.role}[name=${q(name)}]`, code: `page.getByRole(${q(id.role)}, { name: ${q(name)}${clipped ? '' : ', exact: true'} })` };
+}
 
 /** Longest `close` waits for the browser process to exit. */
 export const CLOSE_MAX_MS = 10_000;

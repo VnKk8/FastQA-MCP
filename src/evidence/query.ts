@@ -5,6 +5,7 @@ import type { Finding, Observation, RequestRecord } from '../observation/types.j
 import { SEVERITIES } from '../observation/types.js';
 import { byImportance } from '../quality/engine.js';
 import { describeConfig } from '../config.js';
+import { explainFinding } from '../quality/summary.js';
 
 export interface EvidenceQuery {
   view: 'summary' | 'findings' | 'network' | 'timeline' | 'config';
@@ -58,6 +59,8 @@ export function findingDetail(obs: Observer, f: Finding, withPayload: boolean): 
     `  association: ${obs.actions.describe(f.association)} — ${f.association.reason}`,
     `  first seen ${f.firstAt}${f.batchId ? ` in ${f.batchId}` : ''}${f.scope ? ` (scope ${f.scope})` : ''}`,
   ];
+  const why = explainFinding(obs, f);
+  out.push(`  what it may mean: ${why.impact}`, `  safe next check: ${why.next}`);
   if (f.evidenceIds.length) {
     out.push('  events:');
     for (const id of f.evidenceIds.slice(0, 8)) {
