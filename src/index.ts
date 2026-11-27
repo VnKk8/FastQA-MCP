@@ -2,7 +2,7 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
-import { Session } from './session.js';
+import { Session, CLOSE_MAX_MS } from './session.js';
 import { inArrivalOrder } from './ordering.js';
 import { STEP_KINDS } from './runner.js';
 import { runBatch, qualityOf, structured, type BatchResult, type QualityResult } from './exec.js';
@@ -291,8 +291,8 @@ server.registerTool('flow', {
 }));
 
 server.registerTool('close', { description: 'Close the browser. Session evidence stays readable until the next open.', inputSchema: {} }, exclusive(async () => {
-  await session.close();
-  return text('closed');
+  const state = await session.close();
+  return text(state === 'closed' ? 'closed' : `close requested, but the browser had not exited after ${CLOSE_MAX_MS / 1000}s. It keeps shutting down in the background; the next open starts a new browser.`);
 }));
 
 // ---- CLI: replays flows with no model (for CI) and a few local maintenance commands --------------------------------

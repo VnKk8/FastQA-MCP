@@ -1,6 +1,7 @@
 // Locator and session safety (FQA-004), load and isolation: strict locators, stale refs, queued calls,
 // independent workers, artifact collisions, repeated open/close, origin restriction.
 import { readdirSync, readFileSync, mkdirSync, writeFileSync, mkdtempSync, existsSync } from 'node:fs';
+import { spawn } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { start } from './demo-server.mjs';
@@ -182,6 +183,41 @@ const place = [{ do: 'click', target: 'Place order' }, { do: 'expect_text', valu
 
   let res = await cli('run ../../etc/passwd', { FASTQA_DIR: dir });
   check('CLI: a flow name cannot leave the flows directory', res.code === 2 && !/root:/.test(res.stdout + res.stderr), `${res.code} ${res.stderr.slice(0, 200)}`);
+}
+
+// ---------------------------------------------------------------- 5. close answers when the browser is gone
+// Playwright deletes the browser's temporary profile folder as the last part of browser.close(). On Windows that waits for
+// as long as another program (antivirus, indexer) holds a file in the folder, long after the browser has exited: the
+// close call used to hang for that whole time and clients gave up on it. Only Windows refuses to delete an open file.
+if (process.platform === 'win32') {
+  const profiles = () => readdirSync(tmpdir()).filter((n) => n.startsWith('playwright_chromiumdev_profile-'));
+  const before = new Set(profiles());
+  const s = await connect({ prefix: 'fq-safe-5-' });
+  await s.call('open', { url: `${base}/login` });
+  const mine = profiles().filter((n) => !before.has(n)).map((n) => path.join(tmpdir(), n));
+  // "another program": a second process opens a file in the profile without sharing it, and keeps it open for 8 seconds
+  const HOLD_MS = 8000;
+  const locks = mine.map((dir) => {
+    const f = path.join(existsSync(path.join(dir, 'Default')) ? path.join(dir, 'Default') : dir, 'held-by-another-program.tmp');
+    writeFileSync(f, 'x');
+    return spawn('powershell', ['-NoProfile', '-Command', `$f=[IO.File]::Open('${f}','Open','ReadWrite','None'); 'locked'; Start-Sleep -Milliseconds ${HOLD_MS}; $f.Close()`], { stdio: ['ignore', 'pipe', 'ignore'] });
+  });
+  await Promise.all(locks.map((p) => new Promise((r) => p.stdout.once('data', r))));
+  const released = Promise.all(locks.map((p) => new Promise((r) => p.once('exit', r))));
+  const t0 = Date.now();
+  let out = await s.call('close');
+  const ms = Date.now() - t0;
+  check('close: answers although another program still holds a file in the browser profile', mine.length > 0 && out === 'closed' && ms < HOLD_MS - 2000, `${mine.length} profile folder(s), answered ${JSON.stringify(out)} after ${ms}ms (the file is held for ${HOLD_MS}ms)`);
+  out = await s.call('open', { url: `${base}/login` });
+  has('close: the next open works while the old profile is still being cleaned up', out, 'title: Login');
+  await s.call('close');
+  await released;
+  const end = Date.now() + 15000;
+  while (mine.some((d) => existsSync(d)) && Date.now() < end) await new Promise((r) => setTimeout(r, 200));
+  check('close: the profile folder is removed once the other program lets go', !mine.some((d) => existsSync(d)), mine.filter((d) => existsSync(d)).join(', '));
+  await s.c.close();
+} else {
+  console.log('skip close: the locked-profile check needs Windows (other systems delete open files)');
 }
 
 srv.close();
