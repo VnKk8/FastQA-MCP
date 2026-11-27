@@ -2,9 +2,9 @@
 
 # FastQA-MCP
 
-### A QA-native browser interaction engine for AI agents
+### An MCP tool that turns your AI agent into a QA tester
 
-**Navigate faster. Observe deeper. Discover defects while interacting.**
+**Explore the app. Find the hidden bugs. Replay the tests in CI.**
 
 [![npm version](https://img.shields.io/npm/v/fastqa-mcp?logo=npm&cacheSeconds=3600)](https://www.npmjs.com/package/fastqa-mcp)
 [![npm downloads](https://img.shields.io/npm/dm/fastqa-mcp?logo=npm&cacheSeconds=3600)](https://www.npmjs.com/package/fastqa-mcp)
@@ -22,20 +22,21 @@
 
 > **New in 1.0.2.** File uploads, facts in every result so the agent needs fewer calls, and four new bug detectors: silent failures, double submits, dead clicks and broken images. See the [changelog](CHANGELOG.md).
 
-## Browser automation with a QA mindset
+## A QA tester for your AI agent
 
-Most browser automation starts with a simple question: **Did the interaction work?**
+An AI agent testing a web app usually asks one question: **did the page show the right thing?**
 
-FastQA adds another: **What happened behind the scenes?**
+FastQA makes it ask a second: **what went wrong behind it?**
 
-FastQA is an open-source MCP server built on Playwright. It gives an AI agent fast, compact browser control together with test assertions, network observations and error evidence. It can record a successful journey and replay it later without a model, including in CI.
+FastQA is an open-source MCP server. Your agent uses it to explore a web app, run a whole test in one call, and learn about the bugs a passing page hides, each one explained with its evidence. What the agent got working can be saved and replayed later without a model, including in CI.
 
-- **Interact:** navigate, click, fill, select and verify in one batched call.
-- **Observe:** collect HTTP activity, console errors and uncaught browser exceptions.
+- **Explore:** open a page, see its forms and field rules, and try many steps in one call.
+- **Find bugs:** failed calls, JS errors, silent failures, double submits, dead clicks and broken images are reported without being asked.
+- **Explain:** each finding names the action it most likely came from and the evidence behind it.
 - **Verify:** assert UI state, network responses and accessibility.
-- **Reproduce:** save flows, run them again without AI, and export Playwright tests.
+- **Replay:** save flows, run them again without AI, and export Playwright tests.
 
-FastQA does not need its own LLM, cloud service or database. Bring any compatible MCP client and model. The model decides what to test; FastQA handles browser execution and observations.
+FastQA does not need its own LLM, cloud service or database. Bring any compatible MCP client and model. The model decides what to test; FastQA carries out the steps, watches what happens and reports it.
 
 ## Not Playwright MCP, and not the Playwright command line
 

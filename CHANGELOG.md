@@ -6,7 +6,7 @@ All notable changes to `fastqa-mcp`. Versions follow [semantic versioning](https
 
 ### Changed
 
-- **New package and registry descriptions.** npm and the MCP Registry now describe FastQA by what it does for the agent: it explores a web app, finds and explains the bugs a passing page hides, and replays the tests in CI.
+- **New package and registry descriptions.** npm and the MCP Registry now describe FastQA by what it does for the agent: it explores a web app, finds and explains the bugs a passing page hides, and replays the tests in CI. The README's headline and opening section, and the label in its animation, say the same.
 
 ### Fixed
 
