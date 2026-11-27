@@ -2,6 +2,18 @@
 
 All notable changes to `fastqa-mcp`. Versions follow [semantic versioning](https://semver.org/).
 
+## 1.0.1 (2026-11-27)
+
+### Added
+
+- **Cookie banners.** `open` takes `cookies: "accept" | "reject" | "keep"`, `act` has a `cookies` step, and `FASTQA_COOKIES=accept|reject` makes every `open` answer the banner. FastQA finds the button by the ids of common consent tools, or by the words on it in nine languages, inside iframes and open shadow DOM too. FastQA waits for a banner only while the page is still loading things (at most 2.5 seconds), so a page without one costs about 0.8 seconds. A page without a banner passes, and `reject` never clicks "Settings" or a button that refuses only by subscribing: it reports the buttons it saw instead. The answer is recorded in flows, replayed, and exported to Playwright specs as code. Off unless asked for: with the option unused, nothing changes except about 46 more tokens of tool definitions (about 1,880 in total).
+
+### Fixed
+
+- **`close` no longer hangs on Windows.** Closing waited until the browser's temporary profile folder was deleted. On Windows that takes as long as another program (antivirus, indexer) holds a file in the folder, so the call could outlast the client's time limit although the browser had already closed. `close` now answers once the browser has exited and lets the cleanup finish in the background. If the browser has not exited after 10 seconds, the answer says so instead of waiting.
+- **Parallel replays no longer overwrite each other's report.** Two runs that finished in the same millisecond in one `.fastqa` folder (parallel CI workers) could both write `reports/<time>.html`, so one report was lost. The name is now claimed with an exclusive create, and a run that finds it taken adds its process id.
+- **A page that is still arriving no longer breaks the result.** When a site loaded a new document right after a step and only its head had arrived, the snapshot failed with `Cannot read properties of null`. FastQA now waits for the document.
+
 ## 1.0.0 (2026-11-27)
 
 First stable release. It adds continuous QA: FastQA observes the browser while steps run and reports what it noticed, without being asked. Everything from 0.3 keeps working; read "Compatibility and migration" below before upgrading a pipeline.

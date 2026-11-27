@@ -84,7 +84,7 @@ npx -y fastqa-mcp
 |---|---|
 | `npx` | A tool that comes with Node.js. It downloads a package if you do not have it yet, then runs it. |
 | `-y` | Answers "yes" to the question npx asks before it installs something. Without it, the client would wait for an answer that nobody can type. |
-| `fastqa-mcp` | The FastQA package. Written like this you get the newest version. Write `fastqa-mcp@1.0.0` to always get exactly that version, which is the safer choice for teams and for CI. |
+| `fastqa-mcp` | The FastQA package. Written like this you get the newest version. Write `fastqa-mcp@1.0.1` to always get exactly that version, which is the safer choice for teams and for CI. |
 
 To check that the command works on your computer, run `npx -y fastqa-mcp --version`. It prints a version number and exits.
 
@@ -106,7 +106,7 @@ claude mcp add fastqa -- npx -y fastqa-mcp
 **With options.** Options go between the name and the `--`:
 
 ```bash
-claude mcp add fastqa --scope project --env FASTQA_HEADED=true --env FASTQA_TIMEOUT_MS=8000 -- npx -y fastqa-mcp@1.0.0
+claude mcp add fastqa --scope project --env FASTQA_HEADED=true --env FASTQA_TIMEOUT_MS=8000 -- npx -y fastqa-mcp@1.0.1
 ```
 
 | Option | What it does |
@@ -126,12 +126,13 @@ In the example above, `FASTQA_HEADED=true` shows the browser window so you can w
     "fastqa": {
       "type": "stdio",
       "command": "npx",
-      "args": ["-y", "fastqa-mcp@1.0.0"],
+      "args": ["-y", "fastqa-mcp@1.0.1"],
       "env": {
         "FASTQA_HEADED": "false",
         "FASTQA_QUALITY": "observe",
         "FASTQA_TIMEOUT_MS": "5000",
         "FASTQA_VIEWPORT": "1280x800",
+        "FASTQA_COOKIES": "keep",
         "FASTQA_MAX_LINES": "250",
         "FASTQA_DIR": ".fastqa",
         "FASTQA_VAR_password": "${FASTQA_VAR_password}"
@@ -175,12 +176,14 @@ This example sets every everyday option to its default value, plus one password 
     "servers": {
       "fastqa": {
         "type": "local",
-        "command": ["npx", "-y", "fastqa-mcp@1.0.0"],
+        "command": ["npx", "-y", "fastqa-mcp@1.0.1"],
         "environment": {
           "FASTQA_HEADED": "false",
           "FASTQA_QUALITY": "observe",
           "FASTQA_TIMEOUT_MS": "5000",
           "FASTQA_VIEWPORT": "1280x800",
+          "FASTQA_COOKIES": "keep",
+        "FASTQA_COOKIES": "keep",
           "FASTQA_MAX_LINES": "250",
           "FASTQA_DIR": ".fastqa",
           "FASTQA_VAR_password": "{env:FASTQA_VAR_password}"
@@ -274,6 +277,7 @@ Settings are passed as environment variables: the `--env` option or the `env` bl
 | `FASTQA_QUALITY` | `observe` | What FastQA does with problems it notices by itself, such as failed requests and script errors. `observe` reports them and never fails a step because of them. `strict` also fails a run when a problem is serious (`high` by default). `discovery` works like observe and also keeps a map of the pages and API calls it saw. `debug` works like observe and may store response bodies if the config file allows it. `off` hides the `QA:` line completely. |
 | `FASTQA_TIMEOUT_MS` | `5000` | How long a step waits for its button, field or text before it fails, in milliseconds. 5000 is 5 seconds. Raise it for slow sites. |
 | `FASTQA_VIEWPORT` | `1280x800` | The size of the browser window, as width x height in pixels. |
+| `FASTQA_COOKIES` | `keep` | What FastQA does with a cookie banner each time it opens a page. `accept` clicks the button that accepts, `reject` clicks the button that refuses, `keep` leaves the banner alone. The agent can still choose differently for a single page. See [Cookie banners](#cookie-banners). |
 | `FASTQA_MAX_LINES` | `250` | The most lines of page description FastQA sends back at once. A lower number saves tokens on very large pages; a higher one shows more of the page. |
 | `FASTQA_DIR` | `.fastqa` | The folder where FastQA keeps saved flows, reports, screenshots and its config file. A relative path starts at the folder the client starts FastQA in, which is usually your project folder. |
 | `FASTQA_VAR_<name>` | not set | The value for a `{{name}}` placeholder. With `FASTQA_VAR_password` set, the agent types `{{password}}` and FastQA fills in the real value, so the password never appears in the conversation. You can define as many as you need, for example `FASTQA_VAR_email`. Names that look secret (such as `password`, `token`, `secret`, `pin`, `api_key`) are also hidden in everything FastQA returns, as long as the value has at least 6 characters. |
@@ -336,7 +340,7 @@ The agent owns the reasoning. FastQA owns the execution. Keeping those apart let
 
 | Tool | Responsibility |
 |---|---|
-| `open` | Open a page, begin recording, optionally emulate a device |
+| `open` | Open a page, begin recording, optionally emulate a device or answer the cookie banner |
 | `act` | Run up to 50 steps with built-in checks and compact results |
 | `snapshot` | Inspect interactive elements or the fuller visible page state |
 | `screenshot` | Capture visual evidence when it is useful |
@@ -357,7 +361,7 @@ The repository's benchmark runs the same login, cart and currency journey on the
 |---|---:|---:|
 | Tool calls / model turns | 10 | **2** |
 | Returned tokens (approx.) | 1,270 | **330** |
-| Tool schema tokens (approx.) | 5,300 | **1,840** |
+| Tool schema tokens (approx.) | 5,300 | **1,880** |
 | Browser-side time, one run | 3.1 s | **2.5 s** |
 | Estimated end-to-end at 3 s per model turn | ~33 s | **~8.5 s** |
 | Replay of the saved flow | needs the model again | **1.4 s, no model** |
@@ -375,9 +379,29 @@ The observation layer added in 1.0 was measured against 0.3.2 on the same fixtur
 | Hidden errors | No unexpected page exceptions, console errors or failed network calls |
 | Accessibility | Automated WCAG-oriented axe checks (not a complete accessibility audit) |
 | Mobile view | A supported emulated device |
+| Cookie banners | Accept or reject the banner while the page opens, so the test starts on the real page |
 | Complex UI | Frames, nested frames and open shadow roots |
 | Data-driven runs | Replay a flow with CSV input |
 | Reporting | Failure screenshots, HTML and JUnit XML |
+
+### Cookie banners
+
+Most sites open with a cookie banner that covers the page. FastQA can answer it, so the test starts on the page itself.
+
+- **For one page.** The agent adds `cookies` when it opens the page: `open { "url": "https://example.com", "cookies": "reject" }`. The value is `"accept"`, `"reject"` or `"keep"` (leave the banner alone). You can ask for it in normal words: "open example.com and reject the cookies".
+- **For every page.** Set `FASTQA_COOKIES` to `accept` or `reject` in the client settings (see [All settings](#all-settings)). The agent can still pass `cookies` for a single page.
+- **In the middle of a test.** `{ "do": "cookies", "value": "accept" }` is a step in `act`, like `click` or `fill`.
+
+What you get:
+
+- FastQA waits for the banner while the page is still loading things, at most 2.5 seconds. A page that has gone quiet is not waited on, so a page without a banner costs about 0.8 seconds extra. Then it clicks the button, waits for the banner to go away and returns the page without it. The result has a line such as `✓ cookies "reject" — clicked "Reject all"`.
+- A page without a banner is not an error. The line says `no cookie banner found` and the test goes on.
+- `reject` only clicks a button that really refuses. If the banner offers nothing but "Accept" and "Settings", or "Reject and subscribe", FastQA leaves it alone and lists the buttons it saw, so the agent can decide what to do next.
+- The answer is recorded. A saved flow answers the banner again when it is replayed, and an exported Playwright spec contains the same step.
+
+FastQA finds the button by the ids of common consent tools (OneTrust, Cookiebot, Didomi, Usercentrics, Google's consent message and others). For any other banner it reads the words on the buttons, in English, Bulgarian, German, French, Spanish, Italian, Dutch, Portuguese and Polish. Words only count inside a block that looks like a cookie banner, so an ordinary "Accept" button elsewhere on the page is not touched. Banners inside iframes and open shadow DOM are covered.
+
+No detection covers every site. If a banner is missed, click its button with a normal `click` step. Without `cookies` and without `FASTQA_COOKIES`, FastQA does not touch banners at all.
 
 ## Continuous QA
 

@@ -3,8 +3,8 @@
 import { sleep } from './session.js';
 import { runStep, bind, labelOf } from './runner.js';
 import { summarize } from './quality/summary.js';
-/** Steps after which the page is given a bounded moment to settle (same set as 0.3). */
-const SETTLE_AFTER = /^(goto|click|dblclick|press|select|check|uncheck)$/;
+/** Steps after which the page is given a bounded moment to settle (the 0.3 set, plus cookies). */
+const SETTLE_AFTER = /^(goto|click|dblclick|press|select|check|uncheck|cookies)$/;
 export async function runBatch(session, steps, o) {
     const obs = session.obs;
     const t0 = Date.now();

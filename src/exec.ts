@@ -7,8 +7,8 @@ import { summarize, type QualityBlock } from './quality/summary.js';
 import type { PolicyOutcome } from './quality/engine.js';
 import type { Finding } from './observation/types.js';
 
-/** Steps after which the page is given a bounded moment to settle (same set as 0.3). */
-const SETTLE_AFTER = /^(goto|click|dblclick|press|select|check|uncheck)$/;
+/** Steps after which the page is given a bounded moment to settle (the 0.3 set, plus cookies). */
+const SETTLE_AFTER = /^(goto|click|dblclick|press|select|check|uncheck|cookies)$/;
 
 export interface BatchOptions {
   kind: 'open' | 'act' | 'flow';

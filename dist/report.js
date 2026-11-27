@@ -8,12 +8,9 @@ import { html as esc } from './privacy/redact.js';
  * in strict mode a policy failure is its own JUnit failure. Everything from the app under test is escaped and sanitized.
  */
 export async function writeReports(runs, dir, maxReports = 200) {
-    let stamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const base = new Date().toISOString().replace(/[:.]/g, '-');
     const out = path.join(dir, 'reports');
     await fs.mkdir(out, { recursive: true });
-    // two workers finishing in the same millisecond must not overwrite each other
-    if (await fs.access(path.join(out, `${stamp}.html`)).then(() => true, () => false))
-        stamp += `-${process.pid}`;
     const passed = runs.filter((r) => r.ok).length;
     const total = runs.reduce((a, r) => a + r.ms, 0);
     const candidates = runs.reduce((a, r) => a + r.findingLines.length, 0);
@@ -71,9 +68,23 @@ ${cards}
 ${runs.map((r) => `  <testcase classname="fastqa.flows" name="${esc(r.name)}" time="${(r.ms / 1000).toFixed(3)}">${failure(r)}${sysout(r)}</testcase>`).join('\n')}
 </testsuite>
 `;
+    // Runs that finish in the same millisecond (parallel CI workers sharing a directory) must not overwrite each other.
+    // Checking whether a name is free and then writing it is a race between processes, so the HTML file is created
+    // exclusively: a run that finds the name taken moves on to the next one. Its JUnit file then uses the same name.
+    let stamp = base;
+    for (let n = 0;; n++) {
+        stamp = n === 0 ? base : n === 1 ? `${base}-${process.pid}` : `${base}-${process.pid}-${n}`;
+        try {
+            await fs.writeFile(path.join(out, `${stamp}.html`), html, { flag: 'wx' });
+            break;
+        }
+        catch (e) {
+            if (e?.code !== 'EEXIST' || n >= 100)
+                throw e;
+        }
+    }
     const html_p = path.join(out, `${stamp}.html`);
     const junit_p = path.join(out, `${stamp}.junit.xml`);
-    await fs.writeFile(html_p, html);
     await fs.writeFile(junit_p, junit);
     // latest.* is a convenience copy shared by every run in this directory: losing a race for it must not fail a run
     for (const [name, data] of [['latest.html', html], ['latest.junit.xml', junit]]) {
@@ -89,7 +100,7 @@ ${runs.map((r) => `  <testcase classname="fastqa.flows" name="${esc(r.name)}" ti
 }
 /** Keeps the newest `max` timestamped report pairs. Only files named like a fastqa report are ever removed. */
 async function pruneReports(dir, max) {
-    const stamps = [...new Set((await fs.readdir(dir)).map((f) => /^(\d{4}-\d\d-\d\dT[\d-]+Z(?:-\d+)?)\.(?:html|junit\.xml)$/.exec(f)?.[1]).filter((s) => !!s))].sort();
+    const stamps = [...new Set((await fs.readdir(dir)).map((f) => /^(\d{4}-\d\d-\d\dT[\d-]+Z(?:-\d+){0,2})\.(?:html|junit\.xml)$/.exec(f)?.[1]).filter((s) => !!s))].sort();
     for (const s of stamps.slice(0, Math.max(0, stamps.length - max))) {
         for (const ext of ['html', 'junit.xml'])
             await fs.rm(path.join(dir, `${s}.${ext}`), { force: true }).catch(() => { });

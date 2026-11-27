@@ -46,6 +46,13 @@ export class Session {
     options = {};
     /** called when a session ends (context closed), before the observer is replaced */
     onEnd;
+    /** origins whose cookie banner was already looked for in this context (see the cookies step) */
+    consentAsked = new Set();
+    /** requests whose response is still arriving (unlike `pending`, which ends at the response headers) */
+    loading = new Set();
+    lastLoadAt = Date.now();
+    /** How long the page has fetched nothing, in ms: 0 while a response is still arriving. */
+    quietFor() { return this.loading.size ? 0 : Date.now() - this.lastLoadAt; }
     /** counts main-frame navigations: a ref issued on an older document is stale */
     docGen = 0;
     detachers = [];
@@ -157,6 +164,8 @@ export class Session {
                 return;
             this.pending.add(r);
             this.inflight = this.pending.size;
+            this.loading.add(r);
+            this.lastLoadAt = Date.now();
             const p = pageOf(r);
             if (p)
                 this.obs.onRequest(p, r);
@@ -176,12 +185,14 @@ export class Session {
                 push(this.evidence.failedRequests, `${res.status()} ${r.method()} ${url}`);
         });
         on('requestfinished', (r) => { if (foreign(r))
-            return; this.pending.delete(r); this.inflight = this.pending.size; this.obs.onFinished(r); });
+            return; this.pending.delete(r); this.inflight = this.pending.size; this.loading.delete(r); this.lastLoadAt = Date.now(); this.obs.onFinished(r); });
         on('requestfailed', (r) => {
             if (foreign(r))
                 return;
             this.pending.delete(r);
             this.inflight = this.pending.size;
+            this.loading.delete(r);
+            this.lastLoadAt = Date.now();
             const p = pageOf(r);
             const rec = p ? this.obs.onFailed(p, r) : undefined;
             if (/ERR_ABORTED/.test(r.failure()?.errorText ?? ''))
@@ -208,6 +219,13 @@ export class Session {
                 }
                 catch { /* no frame: leave it */ }
             }
+            for (const r of [...this.loading]) {
+                try {
+                    if (r.frame().page() === page)
+                        this.loading.delete(r);
+                }
+                catch { /* no frame: leave it */ }
+            }
             this.inflight = this.pending.size;
             // a popup that closes hands control back to the page that is still open
             if (this.page === page) {
@@ -220,7 +238,8 @@ export class Session {
         page.on('close', closed);
         this.detachers.push(() => { page.off('framenavigated', nav); page.off('close', closed); });
     }
-    async closeContext() {
+    /** maxMs: longest to wait for the context to close (only `close` sets it: the browser is closed right after anyway). */
+    async closeContext(maxMs) {
         for (const d of this.detachers.splice(0))
             try {
                 d();
@@ -236,19 +255,44 @@ export class Session {
                 console.error(`fastqa: could not finalize session ${this.obs.sessionId}: ${String(e).split('\n')[0]}`);
             }
         }
-        if (this.context && !env.FASTQA_CDP_URL)
-            await this.context.close().catch(() => { });
+        if (this.context && !env.FASTQA_CDP_URL) {
+            const closing = this.context.close().catch(() => { });
+            await (maxMs === undefined ? closing : within(closing, maxMs));
+        }
         this.context = undefined;
         this.page = undefined;
         this.inflight = 0;
         this.pending.clear();
+        this.loading.clear();
         this.lastLines = [];
         this.hints.clear();
+        this.consentAsked.clear();
     }
-    async close() {
-        await this.closeContext();
-        await this.browser?.close().catch(() => { });
+    /**
+     * Closes the browser and answers when it is gone: 'closed', or 'pending' if it had not exited when the time was up.
+     *
+     * Playwright's browser.close() resolves only after it has also deleted the browser's temporary profile folder. On Windows
+     * that takes as long as another program (antivirus, indexer) holds a file in the folder, long after the browser itself has
+     * exited, so waiting for it made the close call hang until clients gave up on it. Here the whole close is awaited as before,
+     * but once the browser process has exited the cleanup gets only `graceMs` more, and nothing is waited for longer than
+     * `maxMs` in total. Whatever is left keeps running in the background; the next open starts a new browser.
+     */
+    async close(o = {}) {
+        const maxMs = o.maxMs ?? CLOSE_MAX_MS;
+        const end = Date.now() + maxMs;
+        await this.closeContext(Math.min(maxMs, CLOSE_MAX_MS) / 2);
+        const b = this.browser;
         this.browser = undefined;
+        if (!b)
+            return 'closed';
+        let exited = !b.isConnected();
+        const gone = new Promise((r) => { if (exited)
+            r();
+        else
+            b.once('disconnected', () => { exited = true; r(); }); });
+        const whole = b.close().catch(() => { }).then(() => { exited = true; });
+        await within(Promise.race([whole, gone.then(() => within(whole, o.graceMs ?? CLOSE_GRACE_MS))]), end - Date.now());
+        return exited ? 'closed' : 'pending';
     }
     /** Wait until network is idle-ish and DOM is quiet. Bounded so it never costs more than ~maxMs. */
     async settle(maxMs = 2000) {
@@ -543,6 +587,18 @@ export class Session {
 function push(arr, s) { if (arr.length < 50)
     arr.push(s.slice(0, 300)); }
 export const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+/** Longest `close` waits for the browser process to exit. */
+export const CLOSE_MAX_MS = 10_000;
+/** After the browser process has exited: how long `close` still waits for Playwright's own cleanup. */
+export const CLOSE_GRACE_MS = 2_000;
+/** Waits for `p`, but not longer than `ms`. Never rejects; true when `p` settled in time. */
+export function within(p, ms) {
+    return new Promise((resolve) => {
+        const timer = setTimeout(() => resolve(false), Math.max(0, ms));
+        const done = () => { clearTimeout(timer); resolve(true); };
+        p.then(done, done);
+    });
+}
 function deviceProfile(name) {
     const key = Object.keys(devices).find((k) => k.toLowerCase() === name.toLowerCase());
     if (!key)

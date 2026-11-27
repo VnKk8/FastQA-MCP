@@ -163,6 +163,9 @@ export function snapshotInPage(opts: SnapOptions): { items: SnapItem[]; truncate
     return { hint: sel, code: `page.locator(${q(sel)})` };
   };
 
+  // A document that has just been navigated to can have a head and no body yet. The caller waits and tries again
+  // (it retries errors that mention navigating), instead of failing on a page that is merely still arriving.
+  if (!document.body) throw new Error('the document has no body yet: the page is still navigating');
   const root: Element = (opts.root && document.querySelector(opts.root)) || document.body;
   const items: SnapItem[] = [];
   const seenText = new Set<string>();

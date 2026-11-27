@@ -366,3 +366,112 @@ test('tool calls are handed to the server one at a time, in arrival order', asyn
   assert.deepEqual(seen, [1, 2]);
   assert.throws(() => inArrivalOrder({ send: async () => {} }), /connect the server/);
 });
+
+// ------------------------------------------------------------------ closing the browser
+// Playwright's browser.close() resolves only after the browser's temporary profile folder is deleted. On Windows that can
+// take as long as another program holds a file in it, long after the browser itself is gone. These tests use a stand-in.
+{
+  const { EventEmitter } = await import('node:events');
+  const { Session } = await import('../dist/session.js');
+  /** exitAfter: ms until the browser process is gone (never if undefined); cleanupAfter: ms until close() resolves (never if undefined) */
+  const fakeBrowser = ({ exitAfter, cleanupAfter } = {}) => {
+    const b = new EventEmitter(); let connected = true;
+    b.cleaned = false; b.closeCalls = 0;
+    b.isConnected = () => connected;
+    b.close = () => {
+      b.closeCalls++;
+      if (exitAfter !== undefined) setTimeout(() => { connected = false; b.emit('disconnected'); }, exitAfter);
+      return new Promise((resolve) => { if (cleanupAfter !== undefined) setTimeout(() => { b.cleaned = true; resolve(); }, cleanupAfter); });
+    };
+    return b;
+  };
+  const timed = async (p) => { const t0 = Date.now(); return { value: await p, ms: Date.now() - t0 }; };
+
+  test('close: an ordinary close waits until Playwright has finished cleaning up', { timeout: 8000 }, async () => {
+    const s = new Session(); const b = s.browser = fakeBrowser({ exitAfter: 10, cleanupAfter: 60 });
+    const r = await timed(s.close({ maxMs: 5000, graceMs: 2000 }));
+    assert.equal(r.value, 'closed');
+    assert.equal(b.cleaned, true, 'the cleanup was awaited');
+    assert.equal(s.browser, undefined);
+    assert.ok(r.ms < 1500, `took ${r.ms}ms`);
+  });
+  test('close: answers once the browser has exited, even if the cleanup never finishes', { timeout: 8000 }, async () => {
+    const s = new Session(); const b = s.browser = fakeBrowser({ exitAfter: 20 });
+    const r = await timed(s.close({ maxMs: 5000, graceMs: 100 }));
+    assert.equal(r.value, 'closed', 'the browser is gone: that is what close reports');
+    assert.equal(b.cleaned, false);
+    assert.ok(r.ms >= 100 && r.ms < 1500, `waited the grace period and no longer: ${r.ms}ms`);
+    assert.equal(s.browser, undefined, 'the next open starts a new browser');
+  });
+  test('close: a browser that never exits is reported as pending when the time is up', { timeout: 8000 }, async () => {
+    const s = new Session(); const b = s.browser = fakeBrowser();
+    const r = await timed(s.close({ maxMs: 150, graceMs: 100 }));
+    assert.equal(r.value, 'pending');
+    assert.equal(b.closeCalls, 1);
+    assert.ok(r.ms >= 140 && r.ms < 1500, `took ${r.ms}ms`);
+    assert.equal(s.browser, undefined, 'the next open starts a new browser instead of waiting for this one');
+  });
+  test('close: a page context that does not close in time does not keep the browser open', { timeout: 8000 }, async () => {
+    const s = new Session(); const b = s.browser = fakeBrowser({ exitAfter: 5, cleanupAfter: 10 });
+    s.context = { close: () => new Promise(() => {}) };
+    const r = await timed(s.close({ maxMs: 300, graceMs: 100 }));
+    assert.equal(r.value, 'closed');
+    assert.equal(b.closeCalls, 1, 'the browser was still told to close');
+    assert.equal(s.context, undefined);
+    assert.ok(r.ms < 1500, `took ${r.ms}ms`);
+  });
+  test('close: nothing open, or a browser that is already gone, answers at once', { timeout: 8000 }, async () => {
+    const s = new Session();
+    assert.equal(await s.close(), 'closed');
+    const b = s.browser = fakeBrowser({ exitAfter: 0, cleanupAfter: 0 });
+    b.isConnected = () => false;
+    const r = await timed(s.close({ maxMs: 5000, graceMs: 50 }));
+    assert.equal(r.value, 'closed'); assert.ok(r.ms < 1000, `took ${r.ms}ms`);
+  });
+}
+
+// ------------------------------------------------------------------ report names
+// Parallel CI workers can share one FASTQA_DIR and finish in the same millisecond. Each run must keep its own report.
+{
+  const { writeReports } = await import('../dist/report.js');
+  const { mkdtempSync, readdirSync, readFileSync, writeFileSync, mkdirSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const path = (await import('node:path')).default;
+  const run = (name) => ({ name, ok: true, stepsOk: true, ms: 5, lines: [`✓ ${name}`], evidence: [], findingLines: [], findings: [] });
+  /** every new Date() in the callback reports the same instant, as two runs ending in the same millisecond would */
+  const sameInstant = async (fn) => {
+    const iso = Date.prototype.toISOString;
+    Date.prototype.toISOString = () => '2026-11-27T11:14:58.080Z';
+    try { return await fn(); } finally { Date.prototype.toISOString = iso; }
+  };
+  const stamped = (dir, ext) => readdirSync(path.join(dir, 'reports')).filter((f) => /^\d{4}-/.test(f) && f.endsWith(ext)).sort();
+
+  test('reports: runs that end in the same millisecond each keep their own report', async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'fq-reports-'));
+    const out = await sameInstant(() => Promise.all(['a', 'b', 'c'].map((n) => writeReports([run(n)], dir))));
+    assert.equal(new Set(out.map((o) => o.html)).size, 3, `three runs, three names: ${out.map((o) => path.basename(o.html)).join(', ')}`);
+    assert.equal(stamped(dir, '.html').length, 3, stamped(dir, '.html').join(', '));
+    assert.equal(stamped(dir, '.junit.xml').length, 3, stamped(dir, '.junit.xml').join(', '));
+    // each file holds the run it was written for, and its JUnit file has the same name
+    for (const [i, o] of out.entries()) {
+      assert.match(readFileSync(o.html, 'utf8'), new RegExp(`✓ ${'abc'[i]}`));
+      assert.equal(o.junit, o.html.replace(/\.html$/, '.junit.xml'));
+      assert.match(readFileSync(o.junit, 'utf8'), new RegExp(`name="${'abc'[i]}"`));
+    }
+  });
+  test('reports: a report another process already wrote under that name is never replaced', async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'fq-reports-'));
+    mkdirSync(path.join(dir, 'reports'));
+    writeFileSync(path.join(dir, 'reports', '2026-11-27T11-14-58-080Z.html'), 'written by another worker');
+    const o = await sameInstant(() => writeReports([run('mine')], dir));
+    assert.equal(readFileSync(path.join(dir, 'reports', '2026-11-27T11-14-58-080Z.html'), 'utf8'), 'written by another worker');
+    assert.notEqual(path.basename(o.html), '2026-11-27T11-14-58-080Z.html');
+  });
+  test('reports: the names given on a collision are still pruned by maxReports', async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'fq-reports-'));
+    await sameInstant(() => Promise.all(['a', 'b', 'c', 'd'].map((n) => writeReports([run(n)], dir, 2))));
+    await writeReports([run('newest')], dir, 2); // a later run prunes to the newest two
+    assert.equal(stamped(dir, '.html').length, 2, stamped(dir, '.html').join(', '));
+    assert.equal(stamped(dir, '.junit.xml').length, 2, stamped(dir, '.junit.xml').join(', '));
+  });
+}
