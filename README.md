@@ -41,8 +41,9 @@ A test places an order. The page says "Thank you for your order". Behind it, a n
 A UI-only assertion passes. FastQA records the failed request and tells the agent without being asked. This is real output from the bundled demo shop:
 
 ```text
-PASSED 2/2 steps in 343ms
-✓ click "Place order" (34ms)
+PASSED 2/2 steps in 323ms
+✓ click "Place order" (38ms)
+  ↳ POST /api/orders 201 65ms · POST /api/notifications 500 14ms
 ✓ expect_text "Thank you for your order" (1ms)
 --- changes ---
 url: http://127.0.0.1:4321/orders?notify=500
@@ -77,23 +78,23 @@ There is nothing else to install. The first time the client starts FastQA, the p
 Every setup below uses the same command:
 
 ```bash
-npx -y fastqa-mcp
+npx -y fastqa-mcp@latest
 ```
 
 | Part | What it does |
 |---|---|
 | `npx` | A tool that comes with Node.js. It downloads a package if you do not have it yet, then runs it. |
 | `-y` | Answers "yes" to the question npx asks before it installs something. Without it, the client would wait for an answer that nobody can type. |
-| `fastqa-mcp` | The FastQA package. Written like this you get the newest version. Write `fastqa-mcp@1.0.1` to always get exactly that version, which is the safer choice for teams and for CI. |
+| `fastqa-mcp@latest` | The FastQA package, in its newest version. `@latest` makes npx look for a new release each time the client starts FastQA, instead of reusing an older copy it downloaded before. To stay on one version, which is the safer choice for teams and for CI, write that version instead, for example `fastqa-mcp@1.0.2`. |
 
-To check that the command works on your computer, run `npx -y fastqa-mcp --version`. It prints a version number and exits.
+To check that the command works on your computer, run `npx -y fastqa-mcp@latest --version`. It prints a version number and exits.
 
 ### Claude Code
 
 **The short way.** Run this once in a terminal, inside your project folder:
 
 ```bash
-claude mcp add fastqa -- npx -y fastqa-mcp
+claude mcp add fastqa -- npx -y fastqa-mcp@latest
 ```
 
 | Part | What it does |
@@ -101,12 +102,12 @@ claude mcp add fastqa -- npx -y fastqa-mcp
 | `claude mcp add` | Tells Claude Code to remember a new MCP server. |
 | `fastqa` | The name you give it. You will see this name in lists and in front of the tool names. |
 | `--` | A separator. Everything after it is the command Claude Code runs to start the server. |
-| `npx -y fastqa-mcp` | The command from step 2. |
+| `npx -y fastqa-mcp@latest` | The command from step 2. |
 
 **With options.** Options go between the name and the `--`:
 
 ```bash
-claude mcp add fastqa --scope project --env FASTQA_HEADED=true --env FASTQA_TIMEOUT_MS=8000 -- npx -y fastqa-mcp@1.0.1
+claude mcp add fastqa --scope project --env FASTQA_HEADED=true --env FASTQA_TIMEOUT_MS=8000 -- npx -y fastqa-mcp@latest
 ```
 
 | Option | What it does |
@@ -126,7 +127,7 @@ In the example above, `FASTQA_HEADED=true` shows the browser window so you can w
     "fastqa": {
       "type": "stdio",
       "command": "npx",
-      "args": ["-y", "fastqa-mcp@1.0.1"],
+      "args": ["-y", "fastqa-mcp@latest"],
       "env": {
         "FASTQA_HEADED": "false",
         "FASTQA_QUALITY": "observe",
@@ -176,14 +177,13 @@ This example sets every everyday option to its default value, plus one password 
     "servers": {
       "fastqa": {
         "type": "local",
-        "command": ["npx", "-y", "fastqa-mcp@1.0.1"],
+        "command": ["npx", "-y", "fastqa-mcp@latest"],
         "environment": {
           "FASTQA_HEADED": "false",
           "FASTQA_QUALITY": "observe",
           "FASTQA_TIMEOUT_MS": "5000",
           "FASTQA_VIEWPORT": "1280x800",
           "FASTQA_COOKIES": "keep",
-        "FASTQA_COOKIES": "keep",
           "FASTQA_MAX_LINES": "250",
           "FASTQA_DIR": ".fastqa",
           "FASTQA_VAR_password": "{env:FASTQA_VAR_password}"
@@ -213,7 +213,7 @@ The smallest version that works is just `type` and `command`:
 ```json
 {
   "$schema": "https://opencode.ai/config.json",
-  "mcp": { "servers": { "fastqa": { "type": "local", "command": ["npx", "-y", "fastqa-mcp"] } } }
+  "mcp": { "servers": { "fastqa": { "type": "local", "command": ["npx", "-y", "fastqa-mcp@latest"] } } }
 }
 ```
 
@@ -225,7 +225,7 @@ The smallest version that works is just `type` and `command`:
   "mcp": {
     "fastqa": {
       "type": "local",
-      "command": ["npx", "-y", "fastqa-mcp"],
+      "command": ["npx", "-y", "fastqa-mcp@latest"],
       "enabled": true,
       "environment": { "FASTQA_HEADED": "false" }
     }
@@ -241,7 +241,7 @@ Both layouts were tested with OpenCode 1.19.
 opencode mcp list   # shows "fastqa connected" when everything is fine
 ```
 
-OpenCode can also write the entry for you: `opencode mcp add fastqa --env FASTQA_HEADED=false -- npx -y fastqa-mcp`. It prints which file it changed. Check that it is the one you meant: depending on the version and the folder you run it in, that is the project file or your global one.
+OpenCode can also write the entry for you: `opencode mcp add fastqa --env FASTQA_HEADED=false -- npx -y fastqa-mcp@latest`. It prints which file it changed. Check that it is the one you meant: depending on the version and the folder you run it in, that is the project file or your global one.
 
 ### Other MCP clients
 
@@ -252,7 +252,7 @@ Any client that can start a local MCP server works. Most of them use the same `m
   "mcpServers": {
     "fastqa": {
       "command": "npx",
-      "args": ["-y", "fastqa-mcp"],
+      "args": ["-y", "fastqa-mcp@latest"],
       "env": { "FASTQA_HEADED": "false" }
     }
   }
@@ -291,9 +291,9 @@ For `FASTQA_HEADED`, the values `1` and `yes` also count as `true`. Rules for wh
 
 ### If it does not start
 
-- **The client does not list FastQA, or says it failed.** Run `npx -y fastqa-mcp --version` in a terminal. If that prints a version, the package is fine and the problem is in the client's file: check the file name, the folder and the commas and brackets.
+- **The client does not list FastQA, or says it failed.** Run `npx -y fastqa-mcp@latest --version` in a terminal. If that prints a version, the package is fine and the problem is in the client's file: check the file name, the folder and the commas and brackets.
 - **"Could not launch a browser".** Run `npx playwright install chromium`, or set `FASTQA_CHROME` to the path of a browser you have.
-- **Windows.** Some clients cannot start `npx` directly on Windows. If the server does not start, use `cmd` as the command and put `/c`, `npx`, `-y`, `fastqa-mcp` in the arguments, for example `claude mcp add fastqa -- cmd /c npx -y fastqa-mcp`.
+- **Windows.** Some clients cannot start `npx` directly on Windows. If the server does not start, use `cmd` as the command and put `/c`, `npx`, `-y`, `fastqa-mcp@latest` in the arguments, for example `claude mcp add fastqa -- cmd /c npx -y fastqa-mcp@latest`.
 - **You changed a setting and nothing happened.** Restart the client. It reads the settings only when it starts the server.
 
 ### Your first test
@@ -360,7 +360,7 @@ The repository's benchmark runs the same login, cart and currency journey on the
 | Metric | @playwright/mcp 0.0.86 | FastQA 1.0 |
 |---|---:|---:|
 | Tool calls / model turns | 10 | **2** |
-| Returned tokens (approx.) | 1,270 | **330** |
+| Returned tokens (approx.) | 1,270 | **360** |
 | Tool schema tokens (approx.) | 5,300 | **1,920** |
 | Browser-side time, one run | 3.1 s | **2.5 s** |
 | Estimated end-to-end at 3 s per model turn | ~33 s | **~8.5 s** |
@@ -369,6 +369,23 @@ The repository's benchmark runs the same login, cart and currency journey on the
 These are results for one small fixture on one machine, not universal guarantees. The end-to-end row is an estimate that assumes 3 seconds per model turn; no live model was timed. Reproduce with `npm run bench`. Real results depend on the site, client, model, hardware and network.
 
 The observation layer added in 1.0 was measured against 0.3.2 on the same fixture with 30 warm runs (`npm run perf`): the same 2 tool calls, median and p95 browser-side time within 1%, clean responses 3% to 11% larger (one extra line), and tool schemas of about 1,840 tokens instead of 1,420. Method and numbers are in the [reference](docs/REFERENCE.md#measured-performance).
+
+### Fewer calls, because results say what happened
+
+Every extra call costs the agent a model turn. So each result also carries the facts the agent would otherwise call again for, one short `↳` line each, only when there is something to say:
+
+```text
+✓ click "Log in" (31ms)
+  ↳ POST /api/login 200 240ms · → /account
+✓ click "Save profile" (12ms)
+  ↳ POST /api/profile 200 35ms · status "Profile saved" came and went
+✓ fill "Mobile" "12345678901" (9ms)
+  ↳ field holds "1234567890" (maxlength 10)
+✗ click "Log in" — No visible element matches "Log in" (…)
+  ↳ closest: button "Login" e12
+```
+
+Field lines in the snapshot show the rules the browser enforces (`maxlength:10 pattern:\d{10}`) and, after a submit attempt, its validation message. When a page opens, one line says how many forms and fields it has, or that a bot check is shown instead of the site. Nothing here adds a wait: it is read during the short settle FastQA already does after each action. See [Facts for the agent](docs/REFERENCE.md#facts-for-the-agent).
 
 ## What FastQA can test
 
@@ -381,6 +398,8 @@ The observation layer added in 1.0 was measured against 0.3.2 on the same fixtur
 | Mobile view | A supported emulated device |
 | Cookie banners | Accept or reject the banner while the page opens, so the test starts on the real page |
 | File uploads | Upload made test files of any type and exact size, or your own files from `.fastqa/files` |
+| Silent failures | A call that failed while the page told the person nothing; one click that submitted twice; a button that does nothing |
+| Form rules | Each field's `maxlength`, `pattern`, `min`/`max` and the browser's validation message, so boundaries are tested without guessing |
 | Complex UI | Frames, nested frames and open shadow roots |
 | Data-driven runs | Replay a flow with CSV input |
 | Reporting | Failure screenshots, HTML and JUnit XML |
