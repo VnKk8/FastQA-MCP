@@ -99,7 +99,7 @@ Notes:
 |---|---|
 | All unit, integration, MCP stdio, replay, export, CLI, reporting, privacy, resource and isolation tests | pass (table above) |
 | The eight tools, legacy inputs and outputs, flows, flags, assertions | pass: `compat.mjs` requires output identical to 0.3.2 apart from the `QA:` block |
-| Package contents and executable | pass: tarball has 29 files (87.8 kB packed, 290 kB unpacked; 0.3.2 had 10 files, 26.5 kB), only `dist/`, `README.md`, `LICENSE`, `package.json`; installed into an empty project, `--version`, `--help`, `config`, MCP server and CLI replay work |
+| Package contents and executable | pass: tarball has 29 files (91.8 kB packed, 302 kB unpacked; 0.3.2 had 10 files, 26.5 kB), only `dist/`, `README.md`, `LICENSE`, `package.json`; installed into an empty project, `--version`, `--help`, `config`, MCP server and CLI replay work |
 | Tracked `dist/` matches the source | pass locally (`npm run build` leaves no diff after commit) and in CI (`git diff --exit-code -- dist`) |
 | MCP client: OpenCode | **pass, real client.** OpenCode 1.19.0, `opencode mcp list` reports `fastqa connected`; `opencode run` with the free model `opencode/big-pickle` called `fastqa_open`, `fastqa_act`, `fastqa_evidence`, `fastqa_flow` (save, run) and `fastqa_close` against the local build and reported the QA line and finding. Transcript: `docs/baseline/opencode-smoke.txt`. Edit, bash and webfetch were denied in that temporary project |
 | MCP client: a second one | **not verified.** Claude Code CLI 2.1.302 found the server from a temporary `.mcp.json` but showed "Pending approval". Approving a project server is the user's decision, so it was not approved. The official MCP SDK stdio client is the second client actually exercised (every e2e suite) |
