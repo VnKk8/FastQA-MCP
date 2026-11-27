@@ -47,5 +47,5 @@ test('the Release workflow keeps server.json in step and publishes it after npm'
   assert.match(workflow, /needs: release[\s\S]*mcp-publisher login github-oidc[\s\S]*mcp-publisher publish/, 'a registry job after the npm release');
   assert.match(workflow, /MCP_PUBLISHER_VERSION: v\d+\.\d+\.\d+/, 'mcp-publisher is pinned');
   // the bump rewrites the file with JSON.stringify(…, null, 2): keep the file in that layout so releases make clean diffs
-  assert.equal(raw, JSON.stringify(server, null, 2) + '\n');
+  assert.equal(raw.replace(/\r\n/g, '\n'), JSON.stringify(server, null, 2) + '\n'); // a Windows checkout may have CRLF
 });
