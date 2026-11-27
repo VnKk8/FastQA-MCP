@@ -1,6 +1,6 @@
 {
   "name": "fastqa-mcp",
-  "version": "0.3.2",
+  "version": "1.0.0",
   "description": "MCP server with a QA mindset that lets an LLM drive and test web UI applications. Batched actions, built-in assertions, network call and status code recording, and record-and-replay with zero LLM calls.",
   "repository": {
     "type": "git",
