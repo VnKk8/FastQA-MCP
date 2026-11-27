@@ -2,8 +2,11 @@ import { auditA11y } from './a11y.js';
 import { Session, DEFAULT_TIMEOUT, sleep, AmbiguousTargetError, warnLegacyTls } from './session.js';
 import { redactor } from './privacy/redact.js';
 import { dismissCookies, describeOutcome, COOKIE_CHOICES, COOKIE_WAIT_MS, COOKIE_RECHECK_MS } from './cookies.js';
+import { prepareUpload, accepts, sendAsBytes, asBytes } from './upload.js';
+/** How long an upload step waits for the file picker once its click on an element that is not a file input has landed. */
+const CHOOSER_WAIT_MS = 2000;
 export const STEP_KINDS = [
-    'goto', 'click', 'dblclick', 'hover', 'fill', 'type', 'press', 'select', 'check', 'uncheck', 'wait', 'cookies',
+    'goto', 'click', 'dblclick', 'hover', 'fill', 'type', 'press', 'select', 'check', 'uncheck', 'wait', 'cookies', 'upload',
     'expect_text', 'expect_no_text', 'expect_url', 'expect_title', 'expect_value',
     'expect_visible', 'expect_hidden', 'expect_enabled', 'expect_disabled', 'expect_count',
     'expect_request', 'expect_no_errors', 'expect_accessible',
@@ -111,8 +114,16 @@ export async function runStep(session, s, tmpl) {
                     for (const [k, v] of used)
                         redactor.addSecret(v, k);
                 }
-                if (s.do === 'fill')
-                    await r.loc.fill(value, { timeout });
+                if (s.do === 'fill') {
+                    try {
+                        await r.loc.fill(value, { timeout });
+                    }
+                    catch (e) {
+                        if (!/Input of type "file" cannot be filled/.test(String(e?.message)))
+                            throw e;
+                        throw new Error(`${q(s.target)} is a file input: use the upload step, e.g. {"do":"upload","target":${q(s.target)},"value":"photo.png"}`);
+                    }
+                }
                 if (s.do === 'type') {
                     await r.loc.click({ timeout });
                     await r.loc.pressSequentially(value, { delay: 10 });
@@ -171,6 +182,47 @@ export async function runStep(session, s, tmpl) {
                 session.consentAsked.add(origin);
                 note = describeOutcome(out, choice);
                 recorded = { do: 'cookies', value: choice, code: `await fq.cookies(${q(choice)});` };
+                break;
+            }
+            case 'upload': {
+                // The files are ready (or the value refused) before any waiting for the target.
+                const files = await prepareUpload(s.value ?? '', () => session.uploadDir());
+                const paths = files.map((f) => f.path);
+                // paths when the browser can open them (fast, no size limit); otherwise the bytes themselves
+                const payload = sendAsBytes(paths, { platform: process.platform, cdpUrl: process.env.FASTQA_CDP_URL }) ? await asBytes(files) : paths;
+                const r = await session.resolveUpload(s.target, timeout, s.frame);
+                let accept = '';
+                if (r.input) {
+                    // setInputFiles ignores `disabled`; a person cannot choose a file there, so neither can the step
+                    const disabled = () => r.loc.evaluate((el) => !!(el.control ?? el).disabled);
+                    if (!(await poll(async () => !(await disabled()), timeout)))
+                        throw new Error('the file input is disabled');
+                    accept = await r.loc.evaluate((el) => (el.control ?? el).accept || '').catch(() => '');
+                    await r.loc.setInputFiles(payload, { timeout });
+                }
+                else {
+                    // a styled button or drop zone: its click opens the file picker, which gets the files. The wait for the picker
+                    // starts when the click has landed, so a button that takes a while to become clickable is not misjudged.
+                    let fc;
+                    let wake = () => { };
+                    const onChooser = (c) => { fc = c; wake(); };
+                    page.on('filechooser', onChooser);
+                    try {
+                        await r.loc.click({ timeout });
+                        if (!fc)
+                            await new Promise((res) => { wake = res; setTimeout(res, CHOOSER_WAIT_MS); });
+                    }
+                    finally {
+                        page.off('filechooser', onChooser);
+                    }
+                    const chooser = fc;
+                    if (!chooser)
+                        throw new Error(`clicking ${q(s.target)} opened no file picker. Target the file input itself: the snapshot lists it as "file", hidden ones too`);
+                    accept = await chooser.element().evaluate((el) => el.accept || '').catch(() => '');
+                    await chooser.setFiles(payload, { timeout });
+                }
+                note = files.length ? files.map((f) => `${f.name} (${f.detail}${accepts(accept, f.name) ? '' : `; not in accept=${q(accept)}`})`).join(', ') : 'selection cleared';
+                recorded = { ...s, target: r.record, frame: r.frame, code: `await fq.upload(${r.code}, ${V(s.value ?? '')});` };
                 break;
             }
             case 'expect_text':

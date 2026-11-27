@@ -4,6 +4,7 @@ import { loadConfig } from './config.js';
 import { Observer } from './observation/observer.js';
 import { redactor } from './privacy/redact.js';
 import { FLOW_DIR } from './dirs.js';
+import { madeDir, removeMadeDirs } from './upload.js';
 /** Thrown in strict locator mode when a target matches more than one element. */
 export class AmbiguousTargetError extends Error {
 }
@@ -48,6 +49,9 @@ export class Session {
     onEnd;
     /** origins whose cookie banner was already looked for in this context (see the cookies step) */
     consentAsked = new Set();
+    /** folders of files that upload steps made: the page reads a chosen file only when it uses it, so they live as long as the context */
+    madeDirs = [];
+    async uploadDir() { const d = await madeDir(); this.madeDirs.push(d); return d; }
     /** requests whose response is still arriving (unlike `pending`, which ends at the response headers) */
     loading = new Set();
     lastLoadAt = Date.now();
@@ -267,6 +271,7 @@ export class Session {
         this.lastLines = [];
         this.hints.clear();
         this.consentAsked.clear();
+        await removeMadeDirs(this.madeDirs.splice(0));
     }
     /**
      * Closes the browser and answers when it is gone: 'closed', or 'pending' if it had not exited when the time was up.
@@ -500,6 +505,92 @@ export class Session {
                 scopes = await this.scopesFor(frame); // frames may appear late
         } while (Date.now() < deadline);
         throw new Error(`No visible element matches "${t}"${frame ? ` in frame "${frame}"` : ''} (tried ${intent === 'fill' ? 'label, placeholder, textbox' : 'role+name, label, text'} in page, shadow DOM and iframes)`);
+    }
+    /**
+     * Target of an upload step. `input` true: a file input (or its label) that takes the files directly. false: a visible
+     * element, such as a styled button or a drop zone, whose click opens the file picker.
+     *  - no target           -> the page's only file input (waits for one to appear; several are listed)
+     *  - ref "e12"           -> that element (the snapshot also lists hidden file inputs)
+     *  - selector or label   -> a file input it names, also a hidden one: styled upload widgets hide the real input
+     *  - anything else       -> the visible element, resolved like a click target
+     */
+    async resolveUpload(target, timeout = DEFAULT_TIMEOUT, frame) {
+        const isInput = (loc) => loc.evaluate((el) => (el.tagName === 'INPUT' && el.type === 'file') || el.control?.type === 'file').catch(() => false);
+        const t = target?.trim();
+        const fr = (c) => (c.length ? c : undefined);
+        if (t && /^e\d+$/.test(t)) {
+            const r = await this.resolve(t, 'click', timeout, frame);
+            return { ...r, input: await isInput(r.loc) };
+        }
+        const FILE = 'input[type=file]';
+        const strict = this.strictNow ?? this.cfg?.strictLocators ?? false;
+        const deadline = Date.now() + timeout;
+        const q = JSON.stringify;
+        // File inputs the target names, visible or not; without a target, every file input. Exact label matches in every
+        // frame come before loose ones, as in resolve(). The recorded code keeps the file-input filter, so an exported spec
+        // picks the same element.
+        const direct = async () => {
+            const scopes = await this.scopesFor(frame);
+            const passes = t && !/^(testid=|css=|xpath=|#|\[|\.|\/\/)/.test(t) ? [true, false] : [true];
+            for (const exact of passes) {
+                const hits = [];
+                for (const chain of scopes) {
+                    const sc = this.scope(chain);
+                    const pre = Session.codePrefix(chain);
+                    const file = sc.locator(FILE);
+                    const fileCode = `${pre}.locator(${q(FILE)})`;
+                    const [loc, code] = !t ? [file, fileCode]
+                        : /^testid=/.test(t) ? [sc.getByTestId(t.slice(7)).and(file), `${pre}.getByTestId(${q(t.slice(7))}).and(${fileCode})`]
+                            : /^(css=|xpath=|#|\[|\.|\/\/)/.test(t) ? [sc.locator(t.replace(/^css=/, '')).and(file), `${pre}.locator(${q(t.replace(/^css=/, ''))}).and(${fileCode})`]
+                                : exact ? [sc.getByLabel(t, { exact: true }).and(file), `${pre}.getByLabel(${q(t)}, { exact: true }).and(${fileCode})`]
+                                    : [sc.getByLabel(t).and(file), `${pre}.getByLabel(${q(t)}).and(${fileCode})`];
+                    const n = await loc.count().catch(() => 0);
+                    if (n)
+                        hits.push({ loc, code, chain, n });
+                }
+                if (hits.length)
+                    return hits;
+            }
+            return [];
+        };
+        if (!t) {
+            for (;;) {
+                const hits = await direct();
+                const total = hits.reduce((a, h) => a + h.n, 0);
+                if (total === 1)
+                    return { loc: hits[0].loc.first(), code: hits[0].code, frame: fr(hits[0].chain), input: true };
+                if (total > 1) {
+                    const names = [];
+                    for (const h of hits)
+                        names.push(...await h.loc.evaluateAll((els) => els.map((el) => {
+                            const lab = (el.labels?.[0]?.textContent || el.getAttribute('aria-label') || el.name || el.id || '').replace(/\s+/g, ' ').trim();
+                            return lab ? JSON.stringify(lab.slice(0, 40)) : '(unnamed)';
+                        })).catch(() => []));
+                    throw new Error(`${total} file inputs on the page: ${names.slice(0, 6).join(', ')}${total > 6 ? ', …' : ''}. Choose one with target`);
+                }
+                if (Date.now() >= deadline)
+                    throw new Error('no file input on the page. Give the element that opens the file picker as target');
+                await sleep(100);
+            }
+        }
+        // Until the deadline: a file input the target names (it may be added late, and hidden), else a visible element.
+        for (;;) {
+            const hits = await direct();
+            if (hits.length) {
+                const h = hits[0];
+                if (h.n > 1 && strict)
+                    throw new AmbiguousTargetError(`"${t}" matches ${h.n} file inputs and strict mode will not pick one. Use a ref from the snapshot`);
+                return { loc: h.loc.first(), record: t, code: h.n > 1 ? `${h.code}.first()` : h.code, frame: fr(h.chain), input: true };
+            }
+            try {
+                const r = await this.resolve(t, 'click', Math.min(300, Math.max(1, deadline - Date.now())), frame);
+                return { ...r, input: await isInput(r.loc) };
+            }
+            catch (e) {
+                if (e instanceof AmbiguousTargetError || Date.now() >= deadline)
+                    throw e;
+            }
+        }
     }
     /** Stamps refs on the first matches and describes them compactly, so the caller can retry with an exact ref. */
     async describeAmbiguous(v, n, t, chain) {

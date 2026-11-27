@@ -94,7 +94,7 @@ server.registerTool('open', {
 const StepSchema = z.object({
     do: z.enum(STEP_KINDS),
     target: z.string().optional().describe('ref "e5", visible text/label like "Log in" or "Email", or a selector: "#id", "css=..", "testid=..". expect_request: "POST /api/orders" or "/regex/". expect_no_errors: optional text to ignore.'),
-    value: z.string().optional().describe('text to fill, key to press, option to select, url, expected text/url (use /regex/ for regex). {{name}} reads env FASTQA_VAR_name so secrets never pass through the model. expect_request: status "200"/"2xx"/"<400". expect_no_errors: "strict" also fails on 4xx. expect_accessible: lowest failing impact, default "serious". cookies: "accept" or "reject".'),
+    value: z.string().optional().describe('text to fill, key to press, option to select, url, expected text/url (use /regex/ for regex). {{name}} reads env FASTQA_VAR_name so secrets never pass through the model. expect_request: status "200"/"2xx"/"<400". expect_no_errors: "strict" also fails on 4xx. expect_accessible: lowest failing impact, default "serious". cookies: "accept" or "reject". upload: files made from a name "photo.png", "big.jpg:6MB", "a.png|b.pdf", or "files/x.pdf" from .fastqa/files; "" clears.'),
     timeout: z.number().optional().describe('ms, default 5000'),
     frame: z.string().optional().describe('only search inside this iframe (title, name, id or src fragment). Usually not needed: targets are searched in the page, shadow DOM and all iframes.'),
 });

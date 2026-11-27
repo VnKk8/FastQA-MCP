@@ -1,6 +1,7 @@
 // Tiny demo shop for testing fastqa: login -> account page -> add products to the cart (async API) -> checkout.
 import http from 'node:http';
 import { cookiePage } from './cookie-pages.mjs';
+import { uploadPage, multipartFiles } from './upload-pages.mjs';
 
 const page = (title, body) => `<!doctype html><html><head><meta charset="utf-8"><title>${title}</title>
 <style>body{font-family:sans-serif;max-width:720px;margin:40px auto}label{display:block;margin:8px 0}
@@ -203,10 +204,15 @@ function faultApi(req, res, body) {
 
 export function start(port = 0) {
   const srv = http.createServer(async (req, res) => {
-    const body = await new Promise((r) => { let d = ''; req.on('data', (c) => (d += c)); req.on('end', () => r(d)); });
+    // kept as bytes: an uploaded binary file must keep its exact size; everything else reads the body as text
+    const raw = await new Promise((r) => { const d = []; req.on('data', (c) => d.push(c)); req.on('end', () => r(Buffer.concat(d))); });
+    const body = raw.toString('utf8');
     const send = (code, type, data, delay = 0) => setTimeout(() => { res.writeHead(code, { 'content-type': type }); res.end(data); }, delay);
     if (faultApi(req, res, body)) return;
     const pathname = (req.url ?? '').split('?')[0];
+    if (pathname === '/api/upload') return send(200, 'application/json', JSON.stringify({ files: multipartFiles(raw, req.headers['content-type']) }));
+    const uploadFixture = uploadPage(pathname);
+    if (uploadFixture) return send(200, 'text/html', uploadFixture);
     if (pathname === '/cookies/slow-body') { // the document arrives in two parts: for 3 seconds it has a head and no body
       res.writeHead(200, { 'content-type': 'text/html' });
       res.write('<!doctype html><html><head><meta charset="utf-8"><title>Cookies reloaded</title></head>');

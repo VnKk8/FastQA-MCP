@@ -59,6 +59,7 @@ export function snapshotInPage(opts: SnapOptions): { items: SnapItem[]; truncate
       if (t === 'radio') return 'radio';
       if (t === 'range') return 'slider';
       if (t === 'search') return 'searchbox';
+      if (t === 'file') return 'file'; // not a textbox: it takes files (the upload step), not text
       return 'textbox';
     }
     if (/^h[1-6]$/.test(tag)) return 'heading';
@@ -116,6 +117,13 @@ export function snapshotInPage(opts: SnapOptions): { items: SnapItem[]; truncate
       if (opt) parts.push('=' + q(clip(opt.text, 40)));
       parts.push('options:' + Array.from(s.options).slice(0, 8).map((o) => clip(o.text, 20)).join('|') + (s.options.length > 8 ? '|…' : ''));
     }
+    if (role === 'file') {
+      const names = Array.from(h.files ?? []).map((f) => f.name);
+      if (names.length) parts.push('=' + q(clip(names.join(', '), 40)));
+      if (h.accept) parts.push('accept:' + clip(h.accept, 40));
+      if (h.multiple) parts.push('[multiple]');
+      if (!visible(el)) parts.push('[hidden]');
+    }
     if (role === 'checkbox' || role === 'radio' || role === 'switch') {
       const checked = h.checked ?? el.getAttribute('aria-checked') === 'true';
       if (checked || el.getAttribute('aria-checked') === 'true') parts.push('[checked]');
@@ -143,7 +151,7 @@ export function snapshotInPage(opts: SnapOptions): { items: SnapItem[]; truncate
       return { hint: sel, code: `page.locator(${q(sel)})` };
     }
     const nm = (el.getAttribute('aria-label') || name).replace(/…$/, '');
-    if (nm && !name.endsWith('…')) {
+    if (nm && !name.endsWith('…') && role !== 'file') { // "file" is fastqa's word, not an ARIA role a locator knows
       return {
         hint: `role=${role}[name=${q(nm)}]`,
         code: `page.getByRole(${q(role)}, { name: ${q(nm)}, exact: true })`,
@@ -170,6 +178,8 @@ export function snapshotInPage(opts: SnapOptions): { items: SnapItem[]; truncate
   const items: SnapItem[] = [];
   const seenText = new Set<string>();
   let truncated = false;
+  const MAX_HIDDEN_FILES = 5;
+  let hiddenFiles = 0;
 
   // Deep walk: light DOM in document order, descending into OPEN shadow roots right after their host.
   // (Closed shadow roots are unreachable from page JS by design.)
@@ -192,12 +202,17 @@ export function snapshotInPage(opts: SnapOptions): { items: SnapItem[]; truncate
     const isInfo = info.has(el);
     const isText = !isI && !isInfo && opts.mode === 'full' && el.matches(TEXT);
     if (!isI && !isInfo && !isText) continue;
-    if (!visible(el)) continue;
+    // A file input is listed even when hidden: styled upload buttons and drop zones hide the real input, which an
+    // upload step can still use. Its line says [hidden]. Only the first few: a table with an "Attach" button per row
+    // would otherwise spend the line budget on inputs whose buttons are listed anyway.
+    const fileInput = isI && el.matches('input[type=file]');
+    if (!fileInput && !visible(el)) continue;
+    if (fileInput && !visible(el) && ++hiddenFiles > MAX_HIDDEN_FILES) continue;
 
     if (isI) {
       // skip interactive elements nested in another interactive element (e.g. span[role=button] inside <a>)
       const parentI = el.parentElement?.closest(INTERACTIVE);
-      if (parentI && interactive.has(parentI) && visible(parentI)) continue;
+      if (!fileInput && parentI && interactive.has(parentI) && visible(parentI)) continue;
       const role = roleOf(el);
       const name = nameOf(el);
       let ref = el.getAttribute('data-fq');
@@ -228,6 +243,7 @@ export function snapshotInPage(opts: SnapOptions): { items: SnapItem[]; truncate
     seenText.add(txt);
     items.push({ line: `· ${q(txt)}` });
   }
+  if (hiddenFiles > MAX_HIDDEN_FILES) items.push({ line: `… ${hiddenFiles - MAX_HIDDEN_FILES} more hidden file inputs` });
   return { items, truncated, url: location.href, title: document.title, maxRef: w.__fq.n };
 }
 
