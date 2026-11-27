@@ -47,33 +47,37 @@ Requires Node 20+. You need a browser, either one of:
 
 fastqa is published on npm as `fastqa-mcp`, so MCP clients start it with `npx -y fastqa-mcp`. There is no separate install step.
 
+The [README](../README.md#quick-start) walks through the setup step by step, with every option explained. The short forms:
+
 ### Claude Code
 ```bash
 claude mcp add fastqa -- npx -y fastqa-mcp
 ```
-You can also commit a project-level `.mcp.json`:
+Options go between the name and `--`: `--scope local|project|user` (default `local`; `project` writes a `.mcp.json` you can commit) and `--env NAME=value` for each [setting](#configuration-env). The same thing as a project-level `.mcp.json`:
 ```json
 { "mcpServers": { "fastqa": { "command": "npx", "args": ["-y", "fastqa-mcp"], "env": { "FASTQA_HEADED": "false" } } } }
 ```
-Keep secrets such as `FASTQA_VAR_password` out of committed files. Set them in your shell or CI instead.
+Keep secrets such as `FASTQA_VAR_password` out of committed files. Set them in your shell or CI and refer to them as `"${FASTQA_VAR_password}"`.
 
 ### OpenCode (`opencode.json`)
 ```json
 {
   "$schema": "https://opencode.ai/config.json",
   "mcp": {
-    "fastqa": {
-      "type": "local",
-      "command": ["npx", "-y", "fastqa-mcp"],
-      "enabled": true,
-      "environment": { "FASTQA_HEADED": "false" }
+    "servers": {
+      "fastqa": {
+        "type": "local",
+        "command": ["npx", "-y", "fastqa-mcp"],
+        "environment": { "FASTQA_HEADED": "false" }
+      }
     }
   }
 }
 ```
+Older OpenCode versions put the entry directly under `"mcp"`, without `"servers"`, and use `"enabled": true`. OpenCode 1.19 accepts both layouts. A secret is referred to as `"{env:FASTQA_VAR_password}"`.
 
 ### Any other MCP client
-Use stdio with the command `npx -y fastqa-mcp`.
+Use stdio with the command `npx -y fastqa-mcp`. Most clients take the `mcpServers` block shown for Claude Code; the README lists where Claude Desktop, Cursor and VS Code keep it.
 
 ### From source
 ```bash

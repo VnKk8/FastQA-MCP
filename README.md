@@ -61,21 +61,160 @@ To make such a failure fail the test, assert it: add an `expect_no_errors` or `e
 
 ## Quick start
 
-Requires Node.js 20+ and a supported browser (installed Chrome or Edge, or Playwright Chromium):
+Setting up FastQA means telling your AI client which command starts it. You never run FastQA yourself. The client starts it in the background when it needs a browser and stops it when it is done.
+
+### Step 1: check what you need
+
+| You need | How to check | If it is missing |
+|---|---|---|
+| Node.js 20 or newer | Run `node --version` in a terminal. It should print `v20` or higher. | Install it from [nodejs.org](https://nodejs.org). |
+| A browser FastQA can control | Google Chrome or Microsoft Edge on your computer is enough. | Run `npx playwright install chromium` once. It downloads a browser that only FastQA uses. |
+
+There is nothing else to install. The first time the client starts FastQA, the package is downloaded automatically.
+
+### Step 2: know the one command
+
+Every setup below uses the same command:
 
 ```bash
-npx playwright install chromium
+npx -y fastqa-mcp
 ```
 
+| Part | What it does |
+|---|---|
+| `npx` | A tool that comes with Node.js. It downloads a package if you do not have it yet, then runs it. |
+| `-y` | Answers "yes" to the question npx asks before it installs something. Without it, the client would wait for an answer that nobody can type. |
+| `fastqa-mcp` | The FastQA package. Written like this you get the newest version. Write `fastqa-mcp@1.0.0` to always get exactly that version, which is the safer choice for teams and for CI. |
+
+To check that the command works on your computer, run `npx -y fastqa-mcp --version`. It prints a version number and exits.
+
 ### Claude Code
+
+**The short way.** Run this once in a terminal, inside your project folder:
 
 ```bash
 claude mcp add fastqa -- npx -y fastqa-mcp
 ```
 
+| Part | What it does |
+|---|---|
+| `claude mcp add` | Tells Claude Code to remember a new MCP server. |
+| `fastqa` | The name you give it. You will see this name in lists and in front of the tool names. |
+| `--` | A separator. Everything after it is the command Claude Code runs to start the server. |
+| `npx -y fastqa-mcp` | The command from step 2. |
+
+**With options.** Options go between the name and the `--`:
+
+```bash
+claude mcp add fastqa --scope project --env FASTQA_HEADED=true --env FASTQA_TIMEOUT_MS=8000 -- npx -y fastqa-mcp@1.0.0
+```
+
+| Option | What it does |
+|---|---|
+| `--scope local` | The default when you leave `--scope` out. Only for you, only in this project folder. Saved in your personal `~/.claude.json`. |
+| `--scope project` | Saved in a file called `.mcp.json` in the project folder. Commit that file and your teammates get the same setup. Claude Code asks each person to approve it the first time. |
+| `--scope user` | Only for you, in every project on this computer. |
+| `--env NAME=value` | Passes one FastQA setting. Repeat it for each setting. `-e` is the short form. The settings are listed under [All settings](#all-settings). |
+
+In the example above, `FASTQA_HEADED=true` shows the browser window so you can watch, and `FASTQA_TIMEOUT_MS=8000` lets each step wait up to 8 seconds.
+
+**As a file.** `--scope project` writes `.mcp.json` for you. You can also create or edit it by hand. This example sets every everyday option to its default value, plus one password placeholder, so you can see them all and change the ones you want:
+
+```json
+{
+  "mcpServers": {
+    "fastqa": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "fastqa-mcp@1.0.0"],
+      "env": {
+        "FASTQA_HEADED": "false",
+        "FASTQA_QUALITY": "observe",
+        "FASTQA_TIMEOUT_MS": "5000",
+        "FASTQA_VIEWPORT": "1280x800",
+        "FASTQA_MAX_LINES": "250",
+        "FASTQA_DIR": ".fastqa",
+        "FASTQA_VAR_password": "${FASTQA_VAR_password}"
+      }
+    }
+  }
+}
+```
+
+| Line | What it does |
+|---|---|
+| `"mcpServers"` | The list of MCP servers for this project. |
+| `"fastqa"` | The name of this server. You choose it. |
+| `"type": "stdio"` | The server is a program on your computer that Claude Code starts and talks to directly. Claude Code writes this line itself; it also works without it. |
+| `"command"` and `"args"` | The command from step 2, split up: the program first, then each of its parts as a separate item. |
+| `"env"` | The FastQA settings. You only need the lines you want to change; delete the rest. Every value is written in quotes, also numbers and `true` or `false`. |
+| `"${FASTQA_VAR_password}"` | Means "take the value from the variable with this name in the terminal that started Claude Code". The real password is never written in the file. Set the variable before you start Claude Code (see [Credentials and safe execution](#credentials-and-safe-execution)), or delete this line if you do not use a password placeholder. |
+
+**Check that it works.**
+
+```bash
+claude mcp list            # every server and whether it is connected
+claude mcp get fastqa      # the details of this one
+claude mcp remove fastqa   # undo the setup
+```
+
+Inside Claude Code, type `/mcp` to see the same list. A server that comes from `.mcp.json` shows "Pending approval" until you approve it in a Claude Code session.
+
+The first start downloads the package, which can take a moment. If Claude Code reports that the server did not start in time, start Claude Code once with a longer limit: `MCP_TIMEOUT=60000 claude` gives it 60 seconds (in PowerShell: `$env:MCP_TIMEOUT=60000; claude`).
+
 ### OpenCode
 
-Add the server to `opencode.json` (merge it into your existing configuration):
+OpenCode reads its setup from a file named `opencode.json`. Put it in your project folder to use FastQA in that project, or in `~/.config/opencode/opencode.json` to use it everywhere. If the file already exists, add the `mcp` part to it; do not replace the whole file.
+
+This example sets every everyday option to its default value, plus one password placeholder:
+
+```json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "servers": {
+      "fastqa": {
+        "type": "local",
+        "command": ["npx", "-y", "fastqa-mcp@1.0.0"],
+        "environment": {
+          "FASTQA_HEADED": "false",
+          "FASTQA_QUALITY": "observe",
+          "FASTQA_TIMEOUT_MS": "5000",
+          "FASTQA_VIEWPORT": "1280x800",
+          "FASTQA_MAX_LINES": "250",
+          "FASTQA_DIR": ".fastqa",
+          "FASTQA_VAR_password": "{env:FASTQA_VAR_password}"
+        },
+        "disabled": false,
+        "timeout": { "startup": 60000 }
+      }
+    }
+  }
+}
+```
+
+| Line | What it does |
+|---|---|
+| `"$schema"` | Lets your editor check the file and suggest keys as you type. Optional. |
+| `"mcp"` → `"servers"` | The list of MCP servers. |
+| `"fastqa"` | The name of this server. You choose it. OpenCode puts it in front of every tool name: `fastqa_open`, `fastqa_act` and so on. |
+| `"type": "local"` | The server is a program on your computer, not an address on the internet. |
+| `"command"` | The command from step 2: the program first, then each of its parts as a separate item. |
+| `"environment"` | The FastQA settings. You only need the lines you want to change; delete the rest. Every value is written in quotes. |
+| `"{env:FASTQA_VAR_password}"` | Means "take the value from the variable with this name in the terminal that started OpenCode". The real password is never written in the file. Delete this line if you do not use a password placeholder. |
+| `"disabled"` | `true` keeps the entry but does not start the server. Handy for switching FastQA off for a while. |
+| `"timeout"` → `"startup"` | How long OpenCode waits for the server to start, in milliseconds. 60000 is one minute, which leaves room for the first download. |
+
+The smallest version that works is just `type` and `command`:
+
+```json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": { "servers": { "fastqa": { "type": "local", "command": ["npx", "-y", "fastqa-mcp"] } } }
+}
+```
+
+**Older OpenCode versions** put the server directly under `"mcp"`, without `"servers"`, and switch it on and off with `"enabled"`. If your version reports a configuration error with the example above, use this layout:
 
 ```json
 {
@@ -91,19 +230,67 @@ Add the server to `opencode.json` (merge it into your existing configuration):
 }
 ```
 
-Restart the client. For a visible browser set `FASTQA_HEADED=true`. For reproducible CI, pin the version you validated, such as `fastqa-mcp@1.0.0`.
+Both layouts were tested with OpenCode 1.19.
+
+**Check that it works.** Restart OpenCode after changing the file, then run:
+
+```bash
+opencode mcp list   # shows "fastqa connected" when everything is fine
+```
+
+OpenCode can also write the entry for you: `opencode mcp add fastqa --env FASTQA_HEADED=false -- npx -y fastqa-mcp`. It prints which file it changed. Check that it is the one you meant: depending on the version and the folder you run it in, that is the project file or your global one.
 
 ### Other MCP clients
 
-Use stdio with the command `npx -y fastqa-mcp`. For clients that use the common `mcpServers` format:
+Any client that can start a local MCP server works. Most of them use the same `mcpServers` block as Claude Code:
 
 ```json
 {
   "mcpServers": {
-    "fastqa": { "command": "npx", "args": ["-y", "fastqa-mcp"] }
+    "fastqa": {
+      "command": "npx",
+      "args": ["-y", "fastqa-mcp"],
+      "env": { "FASTQA_HEADED": "false" }
+    }
   }
 }
 ```
+
+| Client | Where the block goes | What is different |
+|---|---|---|
+| Claude Desktop | `claude_desktop_config.json`. Open it from Settings → Developer → Edit Config. | Nothing. Quit Claude Desktop completely and open it again afterwards. |
+| Cursor | `.cursor/mcp.json` in the project, or `~/.cursor/mcp.json` for all projects. | Nothing. |
+| VS Code (Copilot) | `.vscode/mcp.json` in the project. | The top-level key is `"servers"` instead of `"mcpServers"`, and the entry needs the extra line `"type": "stdio"`. |
+
+These files belong to the clients and their format changes from time to time. If something here does not match what you see, the client's own documentation is right.
+
+### All settings
+
+Settings are passed as environment variables: the `--env` option or the `env` block in Claude Code, the `environment` block in OpenCode. All of them are optional.
+
+| Setting | Default | What it does |
+|---|---|---|
+| `FASTQA_HEADED` | `false` | `true` opens a real browser window so you can watch what happens. `false` runs the browser invisibly, which is faster and what CI needs. |
+| `FASTQA_QUALITY` | `observe` | What FastQA does with problems it notices by itself, such as failed requests and script errors. `observe` reports them and never fails a step because of them. `strict` also fails a run when a problem is serious (`high` by default). `discovery` works like observe and also keeps a map of the pages and API calls it saw. `debug` works like observe and may store response bodies if the config file allows it. `off` hides the `QA:` line completely. |
+| `FASTQA_TIMEOUT_MS` | `5000` | How long a step waits for its button, field or text before it fails, in milliseconds. 5000 is 5 seconds. Raise it for slow sites. |
+| `FASTQA_VIEWPORT` | `1280x800` | The size of the browser window, as width x height in pixels. |
+| `FASTQA_MAX_LINES` | `250` | The most lines of page description FastQA sends back at once. A lower number saves tokens on very large pages; a higher one shows more of the page. |
+| `FASTQA_DIR` | `.fastqa` | The folder where FastQA keeps saved flows, reports, screenshots and its config file. A relative path starts at the folder the client starts FastQA in, which is usually your project folder. |
+| `FASTQA_VAR_<name>` | not set | The value for a `{{name}}` placeholder. With `FASTQA_VAR_password` set, the agent types `{{password}}` and FastQA fills in the real value, so the password never appears in the conversation. You can define as many as you need, for example `FASTQA_VAR_email`. Names that look secret (such as `password`, `token`, `secret`, `pin`, `api_key`) are also hidden in everything FastQA returns, as long as the value has at least 6 characters. |
+| `FASTQA_IGNORE_HTTPS_ERRORS` | see the right column | `true` opens sites whose HTTPS certificate is invalid or self-signed, which is common on test servers. `false` refuses them. If you set nothing, they are opened while there is no `.fastqa/config.json` and refused once that file exists. |
+| `FASTQA_CAPTURE` | not set | Set it to `off` to make sure FastQA never stores response bodies, whatever the config file says. |
+| `FASTQA_STRUCTURED` | `false` | `true` also returns each result as machine-readable data. Leave it off unless you know your client needs it: some clients then pass only that data to the model and drop the readable text. |
+| `FASTQA_CHROME` | not set | The full path of the browser program to use, when you want one specific Chrome or Chromium. On Windows, write every `\` twice inside a JSON file. |
+| `FASTQA_CDP_URL` | not set | Connects to a Chrome you started yourself instead of opening a new one, for example to test in a window where you are already logged in. Start Chrome with `--remote-debugging-port=9222` and set this to `http://127.0.0.1:9222`. FastQA does not close that browser when it is done. |
+
+For `FASTQA_HEADED`, the values `1` and `yes` also count as `true`. Rules for what counts as a problem, expected errors and limits live in `.fastqa/config.json`; see the [reference](docs/REFERENCE.md#configuration-file).
+
+### If it does not start
+
+- **The client does not list FastQA, or says it failed.** Run `npx -y fastqa-mcp --version` in a terminal. If that prints a version, the package is fine and the problem is in the client's file: check the file name, the folder and the commas and brackets.
+- **"Could not launch a browser".** Run `npx playwright install chromium`, or set `FASTQA_CHROME` to the path of a browser you have.
+- **Windows.** Some clients cannot start `npx` directly on Windows. If the server does not start, use `cmd` as the command and put `/c`, `npx`, `-y`, `fastqa-mcp` in the arguments, for example `claude mcp add fastqa -- cmd /c npx -y fastqa-mcp`.
+- **You changed a setting and nothing happened.** Restart the client. It reads the settings only when it starts the server.
 
 ### Your first test
 
@@ -223,7 +410,7 @@ What it does:
 - **Evidence you can hand over.** A sanitized session bundle and a candidate bug draft in Markdown, with reproduction steps as executed and the limits stated.
 - **Privacy first.** Metadata only by default. Query values, credentials and recognised secrets are removed from every output. Payload capture is opt-in, allowlisted and bounded.
 
-What it does not do: it does not prove correctness, it does not test what the agent did not exercise, and a finding is a lead to verify, not a confirmed defect. Backend-only traffic and business intent that never reach the browser are not visible to it. See the [reference](docs/REFERENCE.md#continuous-qa) for rules, modes, configuration and limits, and the [roadmap](docs/FASTQA-ROADMAP.md) for the design behind it.
+What it does not do: it does not prove correctness, it does not test what the agent did not exercise, and a finding is a lead to verify, not a confirmed defect. Backend-only traffic and business intent that never reach the browser are not visible to it. See the [reference](docs/REFERENCE.md#continuous-qa) for rules, modes, configuration and limits.
 
 ## From AI exploration to deterministic CI
 
@@ -298,7 +485,7 @@ claude mcp add fastqa -- node /absolute/path/to/FastQA-MCP/dist/index.js
 
 CI runs the tests on Node 20, 22 and 24 and checks that the committed `dist/` matches the source. Releases go through the repository's release workflow; do not publish by hand.
 
-Useful links: [technical reference](docs/REFERENCE.md) · [changelog](CHANGELOG.md) · [roadmap](docs/FASTQA-ROADMAP.md) · [npm](https://www.npmjs.com/package/fastqa-mcp) · [issues](https://github.com/VnKk8/FastQA-MCP/issues).
+Useful links: [technical reference](docs/REFERENCE.md) · [changelog](CHANGELOG.md) · [npm](https://www.npmjs.com/package/fastqa-mcp) · [issues](https://github.com/VnKk8/FastQA-MCP/issues).
 
 Contributions are welcome, especially reproducible bug reports, small fixture-based tests, browser edge cases, privacy improvements and performance measurements. Keep FastQA fast, portable, evidence-driven and independent of any specific model.
 

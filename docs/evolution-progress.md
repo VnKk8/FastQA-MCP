@@ -1,9 +1,8 @@
 # FastQA-MCP evolution: execution ledger
 
-Plan: `docs/FASTQA-IMPLEMENTATION-PLAN.md` (revision 3). Roadmap: `docs/FASTQA-ROADMAP.md`. Baseline: `docs/evolution-baseline.md`.
-Branch `evolution/v1-roadmap`, cut from `41815d3` (0.3.2), pushed on 2026-11-27 as pull request 1 of `VnKk8/FastQA-MCP`. **Nothing is tagged, published or released**: the release is the maintainer's step, see "Pull request, CI on Linux and release as 1.0.0".
+This is the record of the work that became 1.0.0: what was built, how it was verified, and the decisions taken on the way. It followed a roadmap and an implementation plan (revision 3, tickets FQA-001 to FQA-012). Those two planning documents were removed from the repository before the release at the maintainer's request; "the plan" below refers to them. Baseline: `docs/evolution-baseline.md`.
 
-If context is lost: re-read the two plans and this file, then continue at the first item that is not `verified`.
+Branch `evolution/v1-roadmap`, cut from `41815d3` (0.3.2), pushed on 2026-11-27 as pull request 1 of `VnKk8/FastQA-MCP`. **Nothing is tagged, published or released**: the release is the maintainer's step, see "Pull request, CI on Linux and release as 1.0.0".
 
 ## Ticket status
 
@@ -229,6 +228,7 @@ Decisions taken where the plan left a choice or reality differed. Each has its c
 28. **The polling check got a longer window, not a lower bar.** The discovery check "polling is mostly background" failed on one CI runner (7 of 15). The attribution rule was left as it is (ruling 3), the threshold stayed at one half, and the scenario now waits 2.5 s instead of 0.9 s so the steady state decides (33 of 38 here). Cost if wrong: in a session shorter than about a second, the first four polls of a page are attributed to the nearest action as `inferred`; that is the documented behaviour, not hidden by the test.
 29. **CI lists failed checks as annotations.** The test step writes its output to a file and `bench/ci-annotate.mjs` turns failures into annotations on the pull request. Job logs need a GitHub sign-in; annotations do not. Cost if wrong: a failing run shows up to ten annotations; expected failures quoted inside passing checks are filtered out, and a new output format could slip past that filter.
 30. **Tool calls run in arrival order.** Calls were already queued, but when several were read at once the SDK's asynchronous argument validation let a call with a small schema overtake earlier ones. A queue on the transport (`src/ordering.ts`) now hands calls to the server one at a time. A call cancelled while it waits never runs; at most 1,000 wait. Cost if wrong: a client that sends independent calls in parallel gets them answered strictly one after another (they could not overlap before either), and a tool call that never answers blocks the calls behind it, as before.
+31. **The setup examples show what was checked, and say where they could not be.** The README's Claude Code command and the `.mcp.json` it writes were run with Claude Code 2.1.302 on Windows (the server stays "Pending approval" there, so a live connection through Claude Code was not made). Both OpenCode layouts (`mcp.servers.<name>` from the current OpenCode docs, and the older `mcp.<name>`) were connected with OpenCode 1.19 using `npx -y fastqa-mcp`. The file locations for Claude Desktop, Cursor and VS Code come from their documentation and were not run. Cost if wrong: a client changes its format and an example stops matching; the README says the client's own documentation wins.
 
 ## Blockers
 
