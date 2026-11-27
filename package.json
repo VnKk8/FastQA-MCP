@@ -2,7 +2,7 @@
   "name": "fastqa-mcp",
   "version": "1.0.2",
   "mcpName": "io.github.VnKk8/fastqa-mcp",
-  "description": "MCP server with a QA mindset that lets an LLM drive and test web UI applications. Batched actions, built-in assertions, network call and status code recording, and record-and-replay with zero LLM calls.",
+  "description": "An MCP tool that turns your AI agent into a QA tester: it explores your web app, finds the bugs a passing page hides (silent failures, double submits, dead clicks, broken images), explains each with evidence, and replays what it tested in CI without a model.",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/VnKk8/FastQA-MCP.git"
