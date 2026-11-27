@@ -1,14 +1,14 @@
 // Drill-down views over one session's observations. Progressive disclosure: nothing here is sent unless the agent asks,
 // every list is paged, and payload details need an explicit `details: true`.
 import type { Observer } from '../observation/observer.js';
-import type { Finding, Observation, RequestRecord, Severity } from '../observation/types.js';
-import { SEVERITIES, sevRank } from '../observation/types.js';
+import type { Finding, Observation, RequestRecord } from '../observation/types.js';
+import { SEVERITIES } from '../observation/types.js';
 import { byImportance } from '../quality/engine.js';
 import { describeConfig } from '../config.js';
 
 export interface EvidenceQuery {
   view: 'summary' | 'findings' | 'network' | 'timeline' | 'config';
-  finding?: string; action?: string; batch?: string; rule?: string; severity?: Severity;
+  finding?: string; action?: string; batch?: string;
   status?: 'candidate' | 'expected' | 'suppressed' | 'all';
   path?: string; cursor?: string; limit?: number; details?: boolean;
 }
@@ -102,8 +102,8 @@ export function queryEvidence(obs: Observer, q: EvidenceQuery): string {
     case 'findings': {
       const status = q.status ?? (q.finding ? 'all' : 'candidate');
       const list = eng.findings.filter((f) =>
-        (status === 'all' || f.status === status) && (!q.finding || f.id === q.finding) && (!q.rule || f.ruleId === q.rule) &&
-        (!q.severity || sevRank(f.severity) >= sevRank(q.severity)) && (!q.batch || f.batchId === q.batch) &&
+        (status === 'all' || f.status === status) && (!q.finding || f.id === q.finding) &&
+        (!q.batch || f.batchId === q.batch) &&
         (!q.action || f.association.actionId === q.action || !!f.association.candidateActionIds?.includes(q.action)) &&
         (!q.path || !!f.endpoint?.route.includes(q.path))).sort(byImportance);
       if (!list.length) return q.finding ? `No finding ${q.finding} in session ${obs.sessionId}.` : `No ${status === 'all' ? '' : status + ' '}findings in session ${obs.sessionId}.`;

@@ -12,12 +12,21 @@ export async function writeAtomic(file, data) {
     await fs.mkdir(path.dirname(file), { recursive: true });
     const tmp = `${file}.${process.pid}.${randomBytes(3).toString('hex')}.tmp`;
     await fs.writeFile(tmp, data);
-    try {
-        await fs.rename(tmp, file);
-    }
-    catch (e) {
-        await fs.rm(tmp, { force: true });
-        throw e;
+    // On Windows a rename onto a file that another process is replacing at the same moment fails with EPERM/EBUSY.
+    // Retry briefly, bounded; the last writer wins and the target is always a complete file.
+    for (let attempt = 0;; attempt++) {
+        try {
+            await fs.rename(tmp, file);
+            return;
+        }
+        catch (e) {
+            if (attempt < 20 && ['EPERM', 'EBUSY', 'EACCES'].includes(e?.code)) {
+                await new Promise((r) => setTimeout(r, 15 + attempt * 10));
+                continue;
+            }
+            await fs.rm(tmp, { force: true });
+            throw e;
+        }
     }
 }
 /** Resolve a user-supplied relative path inside the fastqa dir (or the project dir). Rejects traversal and absolute escapes. */

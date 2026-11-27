@@ -1,4 +1,4 @@
-import { SEVERITIES, sevRank } from '../observation/types.js';
+import { SEVERITIES } from '../observation/types.js';
 import { byImportance } from '../quality/engine.js';
 import { describeConfig } from '../config.js';
 const enc = (view, offset) => Buffer.from(JSON.stringify({ v: view, o: offset })).toString('base64url');
@@ -97,8 +97,8 @@ export function queryEvidence(obs, q) {
         }
         case 'findings': {
             const status = q.status ?? (q.finding ? 'all' : 'candidate');
-            const list = eng.findings.filter((f) => (status === 'all' || f.status === status) && (!q.finding || f.id === q.finding) && (!q.rule || f.ruleId === q.rule) &&
-                (!q.severity || sevRank(f.severity) >= sevRank(q.severity)) && (!q.batch || f.batchId === q.batch) &&
+            const list = eng.findings.filter((f) => (status === 'all' || f.status === status) && (!q.finding || f.id === q.finding) &&
+                (!q.batch || f.batchId === q.batch) &&
                 (!q.action || f.association.actionId === q.action || !!f.association.candidateActionIds?.includes(q.action)) &&
                 (!q.path || !!f.endpoint?.route.includes(q.path))).sort(byImportance);
             if (!list.length)

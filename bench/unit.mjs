@@ -87,6 +87,12 @@ test('invalid configuration is a clear error, never a silent fallback', () => {
   assert.throws(() => cfg({ quality: { firstPartyOrigins: ['https://shop.test/path'] } }), /origin/);
   assert.throws(() => cfg({}, { env: { FASTQA_QUALITY: 'loud' } }), ConfigError);
 });
+test('the documented example configuration is valid', async () => {
+  const { readFileSync } = await import('node:fs');
+  const c = cfg(JSON.parse(readFileSync(new URL('../docs/config.example.json', import.meta.url), 'utf8')), { fileExists: true });
+  assert.equal(c.capture.payloads, 'json'); assert.equal(c.strictLocators, true); assert.equal(c.businessRules[0].id, 'ORDER-SUCCESS');
+  assert.equal(c.browser.ignoreHTTPSErrors, false); assert.equal(c.warnings.length, 0);
+});
 test('hard caps cannot be raised by configuration', () => {
   const c = cfg({ capture: { maxEvents: 10_000_000, maxBodyBytes: 50_000_000 } });
   assert.equal(c.capture.maxEvents, CAPS.maxEvents); assert.equal(c.capture.maxBodyBytes, CAPS.maxBodyBytes);
@@ -151,6 +157,17 @@ test('overlap: an earlier action with a request still in flight makes the next s
   assert.equal(amb.confidence, 'ambiguous'); assert.deepEqual(amb.candidateActionIds, [b.actionId, a.actionId]); assert.equal(amb.actionId, undefined);
   t.release({ actionId: a.actionId, confidence: 'inferred', reason: '' }); at(200);
   assert.equal(t.associate(req('GET http://x/b2')).confidence, 'inferred', 'once A has nothing in flight, B is unambiguous again');
+});
+test('periodic traffic: four starts at a steady rhythm stop being blamed on the running action', () => {
+  const { t, at } = tracker(); t.beginBatch('act');
+  const a = t.beginAction('click', 'click "Place order"');
+  const seen = [];
+  for (let i = 0; i < 6; i++) { at(100 + i * 200); seen.push(t.associate(req('GET http://x/api/poll')).confidence); }
+  assert.deepEqual(seen, ['inferred', 'inferred', 'inferred', 'ambiguous', 'ambiguous', 'ambiguous']);
+  at(1400); const p = t.associate(req('GET http://x/api/poll'));
+  assert.match(p.reason, /fires periodically \(about every 2\d\dms\)/); assert.deepEqual(p.candidateActionIds, [a.actionId]);
+  // irregular repeats of a user-driven call are not periodic
+  for (const ms of [2000, 2050, 2900, 3000]) { at(ms); assert.equal(t.associate(req('POST http://x/api/cart')).confidence, 'inferred'); }
 });
 test('direct is reserved for the navigation a goto asked for, once', () => {
   const { t, at } = tracker(); t.beginBatch('open');

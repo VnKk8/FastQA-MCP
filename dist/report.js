@@ -75,7 +75,14 @@ ${runs.map((r) => `  <testcase classname="fastqa.flows" name="${esc(r.name)}" ti
     const junit_p = path.join(out, `${stamp}.junit.xml`);
     await fs.writeFile(html_p, html);
     await fs.writeFile(junit_p, junit);
-    await writeAtomic(path.join(out, 'latest.html'), html);
-    await writeAtomic(path.join(out, 'latest.junit.xml'), junit);
+    // latest.* is a convenience copy shared by every run in this directory: losing a race for it must not fail a run
+    for (const [name, data] of [['latest.html', html], ['latest.junit.xml', junit]]) {
+        try {
+            await writeAtomic(path.join(out, name), data);
+        }
+        catch (e) {
+            console.error(`fastqa: could not update reports/${name}: ${String(e).split('\n')[0]}`);
+        }
+    }
     return { html: html_p, junit: junit_p };
 }
