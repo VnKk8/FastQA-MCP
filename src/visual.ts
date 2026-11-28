@@ -19,11 +19,27 @@ export async function visualAuditInPage(opts: { max: number; scan: number }): Pr
   const issues: VisualIssue[] = [];
   let truncated = false;
   const clip = (s: string, n: number) => { s = (s || '').replace(/\s+/g, ' ').trim(); return s.length > n ? s.slice(0, n - 1) + '…' : s; };
+  // A field is named by its label, placeholder or name, never by what was typed into it: a typed value can be a
+  // password, an OTP or personal data that no downstream pattern recognises. Only a button-like input's value is its
+  // label. Collected safely here rather than redacted later.
+  const safeName = (el: Element): string => {
+    const tag = el.tagName;
+    if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') {
+      const f = el as HTMLInputElement;
+      const type = (f.getAttribute('type') || '').toLowerCase();
+      if (tag === 'INPUT' && /^(button|submit|reset)$/.test(type)) return f.value || '';
+      const by = el.getAttribute('aria-labelledby');
+      const labelled = by ? by.split(/\s+/).map((id) => document.getElementById(id)?.textContent || '').join(' ') : '';
+      const label = labelled || (f.labels && f.labels[0] ? f.labels[0].textContent || '' : '');
+      return label || f.getAttribute('placeholder') || f.getAttribute('name') || (type ? `${type} field` : 'field');
+    }
+    return (el as HTMLElement).innerText || '';
+  };
   const describe = (el: Element): string => {
     const ref = el.getAttribute('data-fq');
     const tag = el.tagName.toLowerCase();
     const role = el.getAttribute('role');
-    const name = clip(el.getAttribute('aria-label') || (el as HTMLElement).innerText || (el as HTMLInputElement).value || '', 30);
+    const name = clip(el.getAttribute('aria-label') || safeName(el) || '', 30);
     const id = el.id ? `#${el.id}` : typeof (el as any).className === 'string' && (el as any).className.trim() ? `.${(el as any).className.trim().split(/\s+/)[0]}` : '';
     return `${role || tag}${name ? ` ${JSON.stringify(name)}` : id ? ` ${clip(id, 40)}` : ''}${ref ? ` ${ref}` : ''}`;
   };

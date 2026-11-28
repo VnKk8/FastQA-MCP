@@ -34,8 +34,11 @@ const writeFlow = (dir, name, steps, extra = {}) => {
   lacks('within: never the other row', net, '/api/intel/delete/2');
   out = await s.call('act', { steps: [{ do: 'click', target: 'Delete', within: 'Invoice 1003' }] });
   has('within: a container that is not there is never widened', out, /^FAILED at step 1\/1/, 'within "Invoice 1003"', 'never widened');
-  out = await s.call('act', { steps: [{ do: 'click', target: 'Edit' }, { do: 'expect_text', value: 'Editing Invoice 1001' }] });
-  has('an ambiguous label that is not destructive keeps the 0.3 behaviour (first match)', out, /^PASSED 2\/2/);
+  out = await s.call('act', { steps: [{ do: 'click', target: 'Edit' }] });
+  has('an ambiguous label in different rows is not guessed either (FQA-04)', out, /^FAILED at step 1\/1/, 'in different rows or cards', /in "Invoice 1001/, /in "Invoice 1002/);
+  lacks('an ambiguous Edit in different rows: nothing was edited', out, 'Editing Invoice');
+  out = await s.call('act', { steps: [{ do: 'click', target: 'Edit', within: 'Invoice 1002' }, { do: 'expect_text', value: 'Editing Invoice 1002' }] });
+  has('within picks the Edit of that row', out, /^PASSED 2\/2/);
   out = await s.call('act', { steps: [{ do: 'click', target: 'Edit' }], strict: true });
   has('strict mode keeps its own wording', out, 'strict mode will not pick one');
   // record, replay and export a step with a container
@@ -121,7 +124,9 @@ const writeFlow = (dir, name, steps, extra = {}) => {
   lacks('FALSE-FAILURE not raised: the error toast belongs to a later action without a submission', out, 'FALSE-FAILURE');
   await rule('stuck', 'Load report', 'STUCK-LOADING', true, 'the spinner outlives every call');
   await rule('spinnerok', 'Load report', 'STUCK-LOADING', false, 'the spinner goes when the call ends');
-  await rule('idem', 'Pay invoice', 'DUPLICATE-SUBMIT', false, 'the same idempotency key twice (a safe retry)');
+  out = await rule('idem', 'Pay invoice', 'DUPLICATE-SUBMIT', false, 'the same idempotency key twice (a safe retry)');
+  has('KEYED-RETRY: the same key twice is an info lead, not silence (FQA-05)', out, '· 1 info');
+  { const ev = await s.call('evidence', { view: 'findings' }); has('KEYED-RETRY: listed as a possible retry to verify, never proof of safety', ev, 'KEYED-RETRY', 'same idempotency key'); }
   out = await rule('dup', 'Pay invoice', 'DUPLICATE-SUBMIT', true, 'the same body twice at once');
   has('a run of steps without assertions says that nothing was verified', out, / · no assertions\n|· no assertions$/m);
   await rule('bigdiff', 'Send data', 'DUPLICATE-SUBMIT', false, 'two different 2 MB bodies of the same length');
@@ -170,6 +175,7 @@ const writeFlow = (dir, name, steps, extra = {}) => {
   await o.call('open', { url: `${base}/intel/offsite` });
   out = await o.call('act', { steps: [{ do: 'click', target: 'Partner site' }, { do: 'expect_text', value: 'never reached' }] });
   has('browser.allowedOrigins: a link to another origin fails its step and stops the batch', out, /^FAILED at step 1\/2/, 'outside browser.allowedOrigins', 'not a network sandbox');
+  has('browser.allowedOrigins: the navigation is blocked before its request is sent (FQA-01)', out, 'blocked before its request was sent');
   await o.close();
 }
 

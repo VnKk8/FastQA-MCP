@@ -7,7 +7,7 @@ import { judgeBackend, judgeUi, permissionText, operationOf } from './permission
 /** How long an upload step waits for the file picker once its click on an element that is not a file input has landed. */
 const CHOOSER_WAIT_MS = 2000;
 export const STEP_KINDS = [
-    'goto', 'click', 'dblclick', 'hover', 'fill', 'type', 'press', 'select', 'check', 'uncheck', 'wait', 'cookies', 'upload',
+    'goto', 'click', 'dblclick', 'hover', 'fill', 'type', 'press', 'select', 'check', 'uncheck', 'wait', 'cookies', 'upload', 'dialog',
     'expect_text', 'expect_no_text', 'expect_url', 'expect_title', 'expect_value',
     'expect_visible', 'expect_hidden', 'expect_enabled', 'expect_disabled', 'expect_count',
     'expect_request', 'expect_no_errors', 'expect_accessible', 'expect_permission',
@@ -172,6 +172,21 @@ export async function runStep(session, s, tmpl) {
                     await page.keyboard.press(key);
                     recorded.code = `await page.keyboard.press(${q(key)});`;
                 }
+                break;
+            }
+            case 'dialog': {
+                // FQA-07: arm the handling of the next native dialog (alert / confirm / prompt) before the step that opens it.
+                // value: "accept", "dismiss" or "accept:<prompt text>"; target: optional text the message must contain. Unarmed
+                // dialogs are still dismissed and reported, so a destructive confirm is never accepted implicitly.
+                const v = (s.value || '').trim();
+                const m = /^(accept|dismiss)(?::([\s\S]*))?$/i.exec(v);
+                if (!m)
+                    throw new Error(`"dialog" needs value "accept", "dismiss" or "accept:<prompt text>", got ${q(s.value)}`);
+                const action = m[1].toLowerCase();
+                const promptText = action === 'accept' ? m[2] : undefined;
+                session.armDialog({ action, promptText, expect: s.target?.trim() || undefined });
+                note = `the next dialog will be ${action === 'accept' ? 'accepted' : 'dismissed'}${s.target ? ` if its message contains ${q(s.target)}` : ''}`;
+                recorded.code = `page.once('dialog', async (d) => { ${s.target ? `expect(d.message()).toContain(${q(s.target)}); ` : ''}await d.${action}(${promptText !== undefined ? q(promptText) : ''}); });`;
                 break;
             }
             case 'wait': {
@@ -373,10 +388,23 @@ export async function runStep(session, s, tmpl) {
                     /^<\d+$/.test(want) ? st > 0 && st < Number(want.slice(1)) :
                         st === Number(want);
                 let seen = [];
+                // FQA-06: by default only the requests of the latest action count, and the latest of them decides, so a success
+                // of an earlier action can never pass an assertion about a later one. Requests attributed to that action come
+                // first; a request the correlation could not attribute (third party, ambiguous) counts only when it started
+                // after the action did. scope "batch" keeps the 1.0.3 meaning: any matching request since the batch started.
+                const batchScope = s.scope === 'batch' || !session.lastAction;
+                const la = session.lastAction;
+                const mine = () => new Set((la && session.obs ? session.obs.requestsOf(la.id) : []).map((r) => r.id));
                 const ok = await poll(async () => {
-                    const hits = session.since(session.mark).filter((e) => e.kind === 'http' && (!method || e.method === method) && matches(e.url, urlPart));
-                    seen = hits.map((h) => h.text);
-                    const ok = hits.filter((h) => okStatus(h.status));
+                    const all = session.since(session.mark).filter((e) => e.kind === 'http' && (!method || e.method === method) && matches(e.url, urlPart));
+                    let hits = all;
+                    if (!batchScope) {
+                        const ids = mine();
+                        const attributed = all.filter((h) => h.rid && ids.has(h.rid));
+                        hits = attributed.length ? attributed : all.filter((h) => !h.rid && h.t >= la.t);
+                    }
+                    seen = (hits.length ? hits : all).map((h) => h.text);
+                    const ok = batchScope ? hits.filter((h) => okStatus(h.status)) : hits.slice(-1).filter((h) => okStatus(h.status));
                     // An assertion that passes on 4xx/5xx responses declares them expected (a negative test): every response of this
                     // batch that satisfies it, so two negative submits followed by two assertions are both covered.
                     for (const h of ok)
@@ -385,7 +413,7 @@ export async function runStep(session, s, tmpl) {
                     return ok.length > 0;
                 }, timeout);
                 if (!ok)
-                    throw new Error(seen.length ? `request seen but status not ${want}: ${seen.slice(-3).join(' ; ')}` : `no ${method ?? ''} request matching ${q(urlPart)} since this run started`);
+                    throw new Error(seen.length ? `request seen but status not ${want}: ${seen.slice(-3).join(' ; ')}${batchScope ? '' : ' (judged: the latest matching request of the latest action)'}` : `no ${method ?? ''} request matching ${q(urlPart)} ${batchScope ? 'since this run started' : 'from the latest action'}`);
                 recorded.code = `await fq.expectRequest(${q(spec)}, ${q(want)});`;
                 break;
             }
@@ -409,7 +437,8 @@ export async function runStep(session, s, tmpl) {
                         hits = session.since(session.mark).filter((e) => e.kind === 'http' && (!method || e.method === method) && matches(e.url, urlPart));
                         return hits.length > 0;
                     }, timeout);
-                    r = judgeBackend(expected, hits.map((h) => h.status));
+                    const rec = (id) => (id ? session.obs?.requests.get(id) : undefined);
+                    r = judgeBackend(expected, hits.map((h) => ({ status: h.status, redirected: !!rec(h.rid)?.redirectedFrom })), session.cfg?.permissions?.deniedStatuses ?? [403]);
                     // a denial that was the expectation is not a QA lead of its own (as an asserted negative test)
                     if (r.verdict === 'pass' && expected === 'denied')
                         for (const h of hits)

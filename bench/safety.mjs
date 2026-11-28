@@ -18,7 +18,10 @@ const place = [{ do: 'click', target: 'Place order' }, { do: 'expect_text', valu
   const { call } = s;
   await call('open', { url: `${base}/orders?notify=off`, fresh: true });
   let out = await call('act', { steps: [{ do: 'click', target: 'Details' }, { do: 'expect_text', value: 'Details of Order #1001' }] });
-  has('default (0.3 behaviour): a duplicate label resolves to the first visible match', out, /^PASSED 2\/2/);
+  // 1.0.4 (FQA-04): the same label in different rows is a different record each time, so it is no longer guessed
+  has('default: a duplicate label in different rows is refused, with the rows', out, /^FAILED at step 1\/2/, 'in different rows or cards', 'Order #1001', 'Order #1002');
+  out = await call('act', { steps: [{ do: 'click', target: 'Details', within: 'Order #1001' }, { do: 'expect_text', value: 'Details of Order #1001' }] });
+  has('default: within picks the row', out, /^PASSED 2\/2/);
   out = await call('act', { steps: [{ do: 'click', target: 'Details' }], strict: true });
   has('strict: a duplicate label fails instead of picking one', out, /^FAILED at step 1\/1/, '"Details" matches 2 elements and strict mode will not pick one');
   has('strict: the error lists refs with their context', out, /Use a ref: (e\d+) button "Details" in "Order #1001 Details" \| (e\d+) button "Details" in "Order #1002 Details"/);

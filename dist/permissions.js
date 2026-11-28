@@ -13,41 +13,59 @@ export function operationOf(op) {
         return { method: m[1].toUpperCase(), path: m[2] };
     return /^\/\S*$/.test(t) ? { path: t } : undefined;
 }
-/** What one response says about permission. A status is evidence, not proof of the server's authorization logic. */
-function category(status) {
+/**
+ * What one response says about permission. A status is evidence, not proof of the server's authorization logic, so only
+ * the statuses this backend is configured to answer a denial with prove one (403 by default; `permissions.deniedStatuses`).
+ * A 401 is a missing or expired session, a 404 a missing or hidden resource, a 405 a wrong method, a redirect usually
+ * a login page: unless configured as a denial, each is inconclusive, never a pass.
+ */
+function category(a, denied) {
+    const status = a.status;
     if (status === 0)
         return 'failed';
-    if (status === 401 || status === 403)
+    if (denied.includes(status))
         return 'denied';
-    if (status === 404 || status === 405)
-        return 'hidden';
-    if (status < 400)
+    if (status === 401 || status === 403 || status === 404 || status === 405)
+        return 'unclear';
+    if (a.redirected || (status >= 300 && status < 400))
+        return 'redirected';
+    if (status < 300)
         return 'accepted';
     if (status >= 500)
         return 'error';
     return 'rejected';
 }
+const UNCLEAR = {
+    401: 'a 401 is a missing or expired session, not a role decision; if this backend answers role denials with 401, add it to permissions.deniedStatuses',
+    403: 'this backend is not configured to answer denials with 403 (permissions.deniedStatuses)',
+    404: 'a 404 can mean the resource does not exist as well as that it is hidden; check with a role that may see it, or add 404 to permissions.deniedStatuses',
+    405: 'a 405 says the method is wrong, not that the role is refused; add it to permissions.deniedStatuses only if this backend uses it for denials',
+};
 /** The backend's answer (latest matching response) against the expectation. */
-export function judgeBackend(expected, statuses) {
-    if (!statuses.length)
+export function judgeBackend(expected, answers, deniedStatuses = [403]) {
+    if (!answers.length)
         return { observed: 'no matching request', provenance: 'none', verdict: 'not tested', note: 'perform the operation in this batch first; fastqa does not send it by itself' };
-    const st = statuses[statuses.length - 1];
-    const c = category(st);
-    const observed = st === 0 ? 'no response (network failure)' : `HTTP ${st}`;
+    const last = answers[answers.length - 1];
+    const a = typeof last === 'number' ? { status: last } : last;
+    const st = a.status;
+    const c = category(a, deniedStatuses);
+    const observed = st === 0 ? 'no response (network failure)' : `HTTP ${st}${a.redirected ? ' after a redirect' : ''}`;
     if (c === 'error' || c === 'failed')
         return { observed, provenance: 'backend', verdict: 'inconclusive', note: 'a server or network error shows nothing about the permission' };
     if (c === 'rejected')
         return { observed, provenance: 'backend', verdict: 'inconclusive', note: 'refused for another reason (validation or conflict): the permission is not shown' };
+    if (c === 'unclear')
+        return { observed, provenance: 'backend', verdict: 'inconclusive', note: UNCLEAR[st] };
+    if (c === 'redirected')
+        return { observed, provenance: 'backend', verdict: 'inconclusive', note: 'the request was redirected (often to a login page): neither an allowance nor a denial is shown' };
     if (expected === 'denied') {
         if (c === 'denied')
             return { observed, provenance: 'backend', verdict: 'pass', note: 'denied by the backend, as expected' };
-        if (c === 'hidden')
-            return { observed, provenance: 'backend', verdict: 'pass', note: `treated as denied: the backend hides the resource (${st})` };
         return { observed, provenance: 'backend', verdict: 'mismatch', note: 'the backend accepted it; whether data changed is not verified' };
     }
     if (c === 'accepted')
         return { observed, provenance: 'backend', verdict: 'pass', note: 'HTTP success; the effect on the data is not verified' };
-    return { observed, provenance: 'backend', verdict: 'mismatch', note: c === 'denied' ? 'denied by the backend' : `refused by the backend (${st})` };
+    return { observed, provenance: 'backend', verdict: 'mismatch', note: 'denied by the backend' };
 }
 /** The UI alone: is the control there and usable for this role. Never proof that the backend protects the operation. */
 export function judgeUi(expected, state) {

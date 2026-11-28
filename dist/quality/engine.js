@@ -1,6 +1,6 @@
 import { sevRank } from '../observation/types.js';
 import { endpointMatches, jsonPointer } from '../util/paths.js';
-import { deadClick, duplicates, silentFailures, falseSuccess, falseFailure, stuckLoading } from './effects.js';
+import { deadClick, duplicates, keyedRetries, silentFailures, falseSuccess, falseFailure, stuckLoading } from './effects.js';
 import { oneLine } from '../util/text.js';
 export const RULES = [
     { id: 'NET-5XX', version: 1, description: 'First-party HTTP 5xx response' },
@@ -9,6 +9,7 @@ export const RULES = [
     { id: 'JS-EXCEPTION', version: 1, description: 'Uncaught exception in the page' },
     { id: 'CONSOLE-ERROR', version: 1, description: 'console.error from the page' },
     { id: 'BUSINESS-ERROR', version: 1, description: 'Configured response invariant violated (needs payload capture)' },
+    { id: 'ENVELOPE-ERROR', version: 1, description: 'A 2xx JSON response whose common result envelope says it failed (success/ok/isSuccess false, error, errors, errorCode); needs payload capture' },
     { id: 'CONTRACT-STATUS', version: 1, description: 'Response status not documented in the configured OpenAPI contract' },
     { id: 'CONTRACT-MEDIA', version: 1, description: 'Response media type not documented in the configured OpenAPI contract' },
     { id: 'CONTRACT-SCHEMA', version: 1, description: 'Response body does not match the configured OpenAPI schema (needs payload capture)' },
@@ -20,6 +21,8 @@ export const RULES = [
     { id: 'SILENT-FAILURE', version: 2, description: 'A first-party submission of an action failed and, until the batch ended, the page showed no message, dialog, new text, field change or new page' },
     // version 2: bodies are compared by a hash of all their bytes (never by length); idempotency keys mark safe retries
     { id: 'DUPLICATE-SUBMIT', version: 2, description: 'One action sent the same submission (method, URL and body) more than once' },
+    // an idempotency key marks the client's intent, not the backend's behaviour: reported as a lead to verify (info)
+    { id: 'KEYED-RETRY', version: 1, description: 'One action sent the same idempotency key more than once: possibly a safe retry, not verified that only one operation took effect' },
     { id: 'DEAD-CLICK', version: 1, description: 'A click on a button or link changed nothing while it was watched: no request, navigation, DOM or form change, dialog, download or picker' },
     { id: 'BROKEN-IMAGE', version: 1, description: 'A first-party image arrived but could not be shown (its request did not fail)' },
     { id: 'FALSE-SUCCESS', version: 1, description: 'A submission of the action failed, yet right after it the page showed a success message and no error' },
@@ -27,6 +30,36 @@ export const RULES = [
     { id: 'STUCK-LOADING', version: 1, description: 'A progress indicator that appeared with the action was still shown after all its calls had an outcome and a bounded extra wait' },
 ];
 const ruleVersion = (id) => RULES.find((r) => r.id === id)?.version ?? 1;
+/**
+ * The failure a common result envelope declares at its top level, or undefined. Keys are matched without case, so the
+ * .NET shape (IsSuccess, Errors, ErrorCode) counts as much as the JSON one. Only keys and literal flags are reported,
+ * never an error text from the body.
+ */
+export function envelopeFailure(raw) {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw))
+        return undefined;
+    const o = {};
+    for (const [k, v] of Object.entries(raw).slice(0, 200))
+        o[k.toLowerCase()] = v;
+    for (const k of ['success', 'issuccess', 'succeeded', 'ok'])
+        if (o[k] === false)
+            return { key: k, text: `${k} = false` };
+    const st = o['status'] ?? o['result'];
+    if (typeof st === 'string' && /^(error|fail|failed|failure)$/i.test(st.trim()))
+        return { key: 'status', text: `status "${st.trim().toLowerCase()}"` };
+    const err = o['error'];
+    if ((typeof err === 'string' && err.trim()) || (err && typeof err === 'object' && Object.keys(err).length))
+        return { key: 'error', text: 'an error' };
+    const errs = o['errors'];
+    if (Array.isArray(errs) && errs.length)
+        return { key: 'errors', text: `${errs.length} error${errs.length > 1 ? 's' : ''}` };
+    for (const k of ['errorcode', 'error_code']) {
+        const c = o[k];
+        if ((typeof c === 'number' && c !== 0) || (typeof c === 'string' && c.trim() && !/^(0|none|ok|success)$/i.test(c.trim())))
+            return { key: k, text: `${k} ${typeof c === 'number' ? c : JSON.stringify(c.trim().slice(0, 30))}` };
+    }
+    return undefined;
+}
 const confidenceOf = (a) => (a.confidence === 'direct' ? 'high' : a.confidence === 'inferred' ? 'medium' : 'low');
 const normText = (s) => s.replace(/\d+/g, 'N').replace(/\s+/g, ' ').trim().slice(0, 140);
 export class QualityEngine {
@@ -209,6 +242,14 @@ export class QualityEngine {
                 actual: `${g.length} identical requests (${g.map((r) => r.id).join(', ')})`, expected: 'one submission per action',
             });
         }
+        for (const g of keyedRetries(e)) {
+            const rec = g[1];
+            this.report({
+                ruleId: 'KEYED-RETRY', severity: 'info', rec, association: rec.association, signature: `${g.length}`, confidence: 'low',
+                title: `${rec.method} ${rec.route} sent ${g.length}× with the same idempotency key by one ${e.action.do}`,
+                actual: `${g.length} requests with one idempotency key (${g.map((r) => r.id).join(', ')})`, expected: 'the backend applies the operation once (not verified)',
+            });
+        }
         if (deadClick(e)) {
             this.report({
                 ruleId: 'DEAD-CLICK', severity: 'low', association: assoc, signature: e.action.label, confidence: 'medium',
@@ -234,6 +275,17 @@ export class QualityEngine {
         if (!this.enabled)
             return;
         const captured = rec.body?.state === 'captured';
+        // A configured rule for this endpoint is the authority; only without one is the common envelope read.
+        if (captured && this.cfg.envelopeErrors && rec.status !== undefined && rec.status >= 200 && rec.status < 300
+            && !this.cfg.businessRules.some((r) => endpointMatches(r, rec.method, rec.path))) {
+            const why = envelopeFailure(raw);
+            if (why)
+                this.report({
+                    ruleId: 'ENVELOPE-ERROR', severity: 'low', confidence: 'low', rec, association: rec.association, signature: why.key,
+                    title: `${rec.method} ${rec.route} → HTTP ${rec.status} but the response says ${why.text}`,
+                    actual: `HTTP ${rec.status} with ${why.text}`, expected: 'a successful result (HTTP 2xx alone does not prove it); confirm with a businessRules entry for this endpoint',
+                });
+        }
         for (const r of this.cfg.businessRules) {
             if (!endpointMatches(r, rec.method, rec.path))
                 continue;

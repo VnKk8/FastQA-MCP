@@ -73,6 +73,22 @@ export function duplicates(e) {
     }
     return [...groups.values()].filter((g) => g.length > 1 && !g.some(failed));
 }
+/**
+ * Groups of submissions of one action that carried the same idempotency key. The key says the client meant a retry;
+ * it does not show that the backend honours it, so this is a possible safe retry to verify, never proof of safety.
+ */
+export function keyedRetries(e) {
+    const groups = new Map();
+    for (const r of e.requests) {
+        if (!submission(r))
+            continue;
+        const key = e.bodyKey(r);
+        if (!key.startsWith('idem:'))
+            continue;
+        groups.set(`${r.method} ${key}`, [...(groups.get(`${r.method} ${key}`) ?? []), r]);
+    }
+    return [...groups.values()].filter((g) => g.length > 1 && !g.some(failed));
+}
 /** What the person was told right after the action: its own window and the gap until the next action. Not later. */
 export function outcomeTold(e) {
     const out = { success: [], error: [], mixed: false, strong: false, validation: false };

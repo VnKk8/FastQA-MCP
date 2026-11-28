@@ -78,6 +78,7 @@ export async function runBatch(session: Session, steps: Step[], o: BatchOptions)
       const pagesBefore = session.context?.pages().length ?? 0;
       if (probed) await drain(lastOwner, 'gap'); // what happened until now belongs to the previous action's gap
       const action = obs.actions.beginAction(step.do, labelOf(step), session.page ? obs.pageId(session.page) : undefined);
+      if (action.interactive) session.lastAction = { id: action.actionId, startedMs: action.startedMs, t: Date.now() };
       // a ref's label is only "e12": the control's name from the snapshot, known before any request of the action starts
       const control = step.target && /^e\d+$/.test(step.target) ? session.hints.get(step.target)?.id?.name : undefined;
       if (control) action.control = control;
@@ -97,7 +98,19 @@ export async function runBatch(session: Session, steps: Step[], o: BatchOptions)
         const left = session.takeLeftOrigin();
         if (left && stepOk) {
           stepOk = false;
-          lines[lines.length - 1] = `${o.number ? `${String(i + 1).padStart(2)}. ` : ''}✗ ${labelOf(step)} — the page went to ${left}, outside browser.allowedOrigins; no further steps run (checked after the navigation: not a network sandbox)`;
+          lines[lines.length - 1] = left.blocked
+            ? `${o.number ? `${String(i + 1).padStart(2)}. ` : ''}✗ ${labelOf(step)} — a navigation to ${left.url} was blocked before its request was sent: outside browser.allowedOrigins; no further steps run (top-level and popup navigations only: not a network sandbox)`
+            : `${o.number ? `${String(i + 1).padStart(2)}. ` : ''}✗ ${labelOf(step)} — the page went to ${left.url}, outside browser.allowedOrigins; no further steps run (checked after the navigation: not a network sandbox)`;
+        }
+        // FQA-07: an armed dialog is judged after the step that follows the "dialog" step (bounded: that step's own settle)
+        const arm = session.dialogArm;
+        if (arm && step.do !== 'dialog' && ++arm.steps >= 1) {
+          session.dialogArm = undefined;
+          if (stepOk && (arm.mismatch || !arm.consumed)) {
+            stepOk = false;
+            const why = arm.mismatch ? `a dialog appeared but its message was ${JSON.stringify(arm.mismatch)}, not one containing ${JSON.stringify(arm.expect)} (dismissed)` : 'the armed dialog did not appear';
+            lines[lines.length - 1] = `${o.number ? `${String(i + 1).padStart(2)}. ` : ''}✗ ${labelOf(step)} — ${why}`;
+          }
         }
         if (r.ok && INTERACTIVE.test(step.do)) {
           watched[i] = { action, probed, executedAt, endedAt: Date.now(), ...where(session, urlBefore, pagesBefore) };

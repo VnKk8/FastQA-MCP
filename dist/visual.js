@@ -10,11 +10,28 @@ export async function visualAuditInPage(opts) {
     const issues = [];
     let truncated = false;
     const clip = (s, n) => { s = (s || '').replace(/\s+/g, ' ').trim(); return s.length > n ? s.slice(0, n - 1) + '…' : s; };
+    // A field is named by its label, placeholder or name, never by what was typed into it: a typed value can be a
+    // password, an OTP or personal data that no downstream pattern recognises. Only a button-like input's value is its
+    // label. Collected safely here rather than redacted later.
+    const safeName = (el) => {
+        const tag = el.tagName;
+        if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') {
+            const f = el;
+            const type = (f.getAttribute('type') || '').toLowerCase();
+            if (tag === 'INPUT' && /^(button|submit|reset)$/.test(type))
+                return f.value || '';
+            const by = el.getAttribute('aria-labelledby');
+            const labelled = by ? by.split(/\s+/).map((id) => document.getElementById(id)?.textContent || '').join(' ') : '';
+            const label = labelled || (f.labels && f.labels[0] ? f.labels[0].textContent || '' : '');
+            return label || f.getAttribute('placeholder') || f.getAttribute('name') || (type ? `${type} field` : 'field');
+        }
+        return el.innerText || '';
+    };
     const describe = (el) => {
         const ref = el.getAttribute('data-fq');
         const tag = el.tagName.toLowerCase();
         const role = el.getAttribute('role');
-        const name = clip(el.getAttribute('aria-label') || el.innerText || el.value || '', 30);
+        const name = clip(el.getAttribute('aria-label') || safeName(el) || '', 30);
         const id = el.id ? `#${el.id}` : typeof el.className === 'string' && el.className.trim() ? `.${el.className.trim().split(/\s+/)[0]}` : '';
         return `${role || tag}${name ? ` ${JSON.stringify(name)}` : id ? ` ${clip(id, 40)}` : ''}${ref ? ` ${ref}` : ''}`;
     };

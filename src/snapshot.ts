@@ -109,7 +109,12 @@ export function snapshotInPage(opts: SnapOptions): { items: SnapItem[]; truncate
     const h = el as HTMLInputElement;
     if (role === 'textbox' || role === 'searchbox') {
       const v = el.getAttribute('contenteditable') !== null ? (el.textContent || '') : h.value;
-      if (v) parts.push(h.type === 'password' ? '=•••' : '=' + q(clip(v, 40)));
+      // a field that declares itself secret (password, one-time code, card data) or is named like one shows no value
+      const ac = (el.getAttribute('autocomplete') || '').toLowerCase();
+      const ident = `${el.getAttribute('name') || ''} ${el.id || ''}`;
+      const secret = h.type === 'password' || /one-time-code|current-password|new-password|\bcc-/.test(ac)
+        || /\b(otp|pin|cvv|cvc|card.?number|iban|ssn|secret|token|passcode)\b/i.test(ident.replace(/[_-]/g, ' '));
+      if (v) parts.push(secret ? '=•••' : '=' + q(clip(v, 40)));
     }
     if (role === 'combobox' && el.tagName === 'SELECT') {
       const s = el as HTMLSelectElement;

@@ -235,7 +235,8 @@ function fastqa(page: import('@playwright/test').Page) {
       const method = m?.[1].toUpperCase(); const urlPart = m ? m[2] : spec;
       const okStatus = (st: number) => /^\\dxx$/i.test(want) ? Math.floor(st / 100) === Number(want[0]) : /^<\\d+$/.test(want) ? st > 0 && st < Number(want.slice(1)) : st === Number(want);
       const hits = () => log.filter((e) => e.kind === 'http' && (!method || e.method === method) && matches(e.url!, urlPart));
-      await expect.poll(() => hits().some((h) => okStatus(h.status!)), { timeout, message: \`expect_request \${spec} \${want} — seen: \${hits().map((h) => h.text).slice(-3).join(' ; ') || 'no matching request'}\` }).toBe(true);
+      // the latest matching response decides (fastqa replay narrows further, to the latest action's requests)
+      await expect.poll(() => { const h = hits(); return h.length > 0 && okStatus(h[h.length - 1].status!); }, { timeout, message: \`expect_request \${spec} \${want} — seen: \${hits().map((h) => h.text).slice(-3).join(' ; ') || 'no matching request'}\` }).toBe(true);
     },
     /** JS exceptions, console.error, network failures and HTTP 5xx since the test started; "strict" also counts 4xx */
     async expectNoErrors(mode = '', ignore?: string) {

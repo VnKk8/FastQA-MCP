@@ -39,8 +39,17 @@ for (const old of legacyTools) {
   // "Still accepted with the same type": everything 0.3.2 declared is declared the same way now. Three things may differ,
   // because none of them rejects an input that 0.3.2 accepted: descriptions, more allowed values in an enum (a new step
   // kind), and more optional properties of an object.
+  // Since zod 4 (1.0.4) the generated schema also omits `additionalProperties: false` on step objects and adds
+  // `propertyNames: {type: string}` to records: the first accepts more, the second states what JSON keys always are.
+  // Neither rejects an input that 0.3.2 accepted, so both are tolerated here.
   const same = (a, b, key) => {
     if (key === 'description') return true;
+    if (key === 'additionalProperties' && a === false && b === undefined) return true;
+    if (a && typeof a === 'object' && b && typeof b === 'object' && !Array.isArray(a)) {
+      const { propertyNames, ...rest } = b;
+      if (propertyNames && !('propertyNames' in a) && JSON.stringify(propertyNames) === '{"type":"string"}') b = rest;
+      if (a.additionalProperties === false && !('additionalProperties' in b)) { const { additionalProperties, ...ra } = a; a = ra; }
+    }
     if (key === 'enum') return Array.isArray(a) && Array.isArray(b) && a.every((v) => b.includes(v));
     if (Array.isArray(a)) return Array.isArray(b) && a.length === b.length && a.every((v, i) => same(v, b[i]));
     if (a && typeof a === 'object') return !!b && typeof b === 'object' && Object.keys(a).every((k) => same(a[k], b[k], k)) && Object.keys(b).every((k) => k in a || k === 'description' || key === 'properties');

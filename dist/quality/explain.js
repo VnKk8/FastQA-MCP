@@ -38,6 +38,10 @@ export function explain(f, describe) {
             return { relation, impact: 'part of the operation was kept and part was not: data may be inconsistent (not verified)', next: `check which parts were saved ${noResubmit}` };
         case 'DUPLICATE-SUBMIT':
             return { relation, impact: 'the same submission was sent more than once: it may have created duplicates (not verified)', next: `check for duplicate records ${noResubmit}` };
+        case 'ENVELOPE-ERROR':
+            return { relation, impact: 'the server answered 2xx but its result says the operation failed; the page may show success anyway (not verified)', next: 'check the resulting state without submitting again; if this envelope is how the endpoint reports failure, add a businessRules entry so it is judged exactly' };
+        case 'KEYED-RETRY':
+            return { relation, impact: 'the client retried with one idempotency key; that is safe only if the backend honours the key (not verified)', next: `check that only one record or charge exists ${noResubmit}` };
         case 'DEAD-CLICK':
             return { relation, impact: 'the control did nothing visible; it may be broken, or it may need a precondition', next: 'check whether the control should be disabled here or is missing its handler; one more click is safe only if it does not submit anything' };
         case 'STUCK-LOADING':

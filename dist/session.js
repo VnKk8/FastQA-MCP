@@ -7,6 +7,8 @@ import { FLOW_DIR } from './dirs.js';
 import { madeDir, removeMadeDirs } from './upload.js';
 import { probeInit, mergeProbes } from './probe.js';
 import { oneLine } from './util/text.js';
+/** Containers that hold one record each: a table row, a list item, an article, a card. */
+const ROWS = 'tr,[role=row],li,[role=listitem],article,[role=article],[class*=card],[class*=Card]';
 /** Containers a text-based `within` can mean: a table row, a list item, a card, a section, a form, a dialog. */
 export const CONTAINERS = 'tr,[role=row],li,[role=listitem],article,[role=article],section,fieldset,form,[role=region],[role=group],dialog,[role=dialog],[class*=card],[class*=Card]';
 /**
@@ -14,7 +16,7 @@ export const CONTAINERS = 'tr,[role=row],li,[role=listitem],article,[role=articl
  * one (even without strict mode). The list is a guard, not a guarantee: a destructive button with another label is
  * protected only by strict mode, a ref or `within`.
  */
-export const DESTRUCTIVE = /\b(delete|remove|destroy|discard|erase|purge|wipe|revoke|terminate|deactivate|unsubscribe|ban|archive|reset|pay|pay now|purchase|buy now|place order|checkout|confirm|submit|send|transfer|withdraw|refund|approve|reject|publish|cancel (?:order|subscription|booking|account|plan))\b|löschen|entfernen|supprimer|eliminar|excluir|elimina|изтрий|премахни/i;
+export const DESTRUCTIVE = /\b(delete|remove|destroy|discard|erase|purge|wipe|revoke|terminate|deactivate|unsubscribe|ban|archive|reset|pay|pay now|purchase|buy now|place order|checkout|confirm|submit|send|transfer|withdraw|refund|approve|reject|publish|cancel (?:order|subscription|booking|account|plan))\b|löschen|entfernen|bezahlen|bestätigen|supprimer|payer|confirmer|eliminar|pagar|confirmar|excluir|elimina|paga|conferma|изтрий|изтриване|премахни|премахване|плати|плащане|потвърди|потвърждение|изпрати|поръчай|откажи|анулирай|теглене|преведи/i;
 /** Role and name from a snapshot line: `e12 button "Delete"`. */
 export function identityOf(line) {
     const m = /^\s*e\d+ (\S+)(?: "((?:[^"\\]|\\.)*)")?/.exec(line);
@@ -59,6 +61,8 @@ export class Session {
     log = [];
     /** start of the current act batch / flow run; expect_request and expect_no_errors look from here */
     mark = 0;
+    /** the latest interactive action (click, fill, goto, …) that ran: what an action-scoped expect_request judges */
+    lastAction;
     device;
     /** observation scope of the current browser context; kept after close so evidence stays readable */
     obs;
@@ -131,6 +135,7 @@ export class Session {
             for (const h of sessionHooks.created)
                 h(this);
             this.attachContext(this.context);
+            await this.guardOrigins(this.context);
             // the page probe: what an action did that the final snapshot cannot show (see probe.ts)
             await this.context.addInitScript(probeInit).catch(() => { });
         }
@@ -272,8 +277,48 @@ export class Session {
      * a redirect or a popup takes a page: the first main-frame navigation to another origin is remembered here and the
      * running step fails (see runBatch). It is checked after the navigation happened: a restriction, not a network sandbox.
      */
+    /** FQA-07: how the next native dialog is handled, armed by a "dialog" step; checked after the step that follows it */
+    dialogArm;
+    armDialog(a) { this.dialogArm = { ...a, consumed: false, steps: 0 }; }
     leftTo;
-    takeLeftOrigin() { const u = this.leftTo; this.leftTo = undefined; return u; }
+    /** the navigation to another origin was stopped before its document request was sent (see guardOrigins) */
+    leftBlocked = false;
+    takeLeftOrigin() {
+        const u = this.leftTo;
+        const blocked = this.leftBlocked;
+        this.leftTo = undefined;
+        this.leftBlocked = false;
+        return u ? { url: u, blocked } : undefined;
+    }
+    /**
+     * FQA-01: with browser.allowedOrigins set, a document navigation (top level or a popup) to another origin is aborted
+     * before its request leaves the browser, and remembered so the step fails as before. Only requests to origins outside
+     * the list reach the handler (the route's URL predicate), and only document navigations are stopped: images, scripts
+     * and API calls of third parties still load. Without allowedOrigins no route is installed (routing turns off the HTTP
+     * cache, so it is never paid for when unused). Frames, workers and fetch() are not covered: still not a network sandbox.
+     */
+    async guardOrigins(ctx) {
+        const allowed = this.cfg?.browser.allowedOrigins ?? [];
+        if (!allowed.length)
+            return;
+        await ctx.route((u) => /^https?:$/.test(u.protocol) && !allowed.includes(u.origin), async (route) => {
+            const r = route.request();
+            let top = false;
+            try {
+                top = r.isNavigationRequest() && r.resourceType() === 'document' && r.frame() === r.frame().page()?.mainFrame();
+            }
+            catch {
+                top = r.isNavigationRequest();
+            }
+            if (!top)
+                return route.fallback();
+            if (!this.leftTo) {
+                this.leftTo = redactor.pageUrl(r.url());
+                this.leftBlocked = true;
+            }
+            return route.abort('blockedbyclient');
+        }).catch(() => { });
+    }
     checkOrigin(url) {
         const allowed = this.cfg?.browser.allowedOrigins ?? [];
         if (!allowed.length || this.leftTo || !/^https?:/i.test(url))
@@ -326,7 +371,22 @@ export class Session {
         // beforeunload is accepted (leaving goes ahead), alert / confirm / prompt are dismissed. Behaviour is unchanged.
         const dialog = (d) => {
             const beforeunload = d.type() === 'beforeunload';
-            this.note({ kind: 'dialog', type: d.type(), text: redactor.text(d.message().replace(/\s+/g, ' ').trim().slice(0, 80)) });
+            const text = redactor.text(d.message().replace(/\s+/g, ' ').trim().slice(0, 80));
+            const arm = this.dialogArm;
+            if (arm && !arm.consumed && !beforeunload) {
+                arm.consumed = true;
+                if (arm.expect && !d.message().includes(arm.expect)) {
+                    arm.mismatch = text;
+                    this.note({ kind: 'dialog', type: d.type(), text: `${text} (dismissed: not the expected dialog)` });
+                    d.dismiss().catch(() => { });
+                    return;
+                }
+                // the prompt text is never written to the evidence
+                this.note({ kind: 'dialog', type: d.type(), text: `${text} (${arm.action === 'accept' ? 'accepted' : 'dismissed'} as armed)` });
+                (arm.action === 'accept' ? d.accept(arm.promptText) : d.dismiss()).catch(() => { });
+                return;
+            }
+            this.note({ kind: 'dialog', type: d.type(), text });
             (beforeunload ? d.accept() : d.dismiss()).catch(() => { });
         };
         const download = (d) => this.note({ kind: 'download', text: redactor.text(d.suggestedFilename().slice(0, 80)) });
@@ -605,6 +665,13 @@ export class Session {
                             throw new AmbiguousTargetError(await this.describeAmbiguous(v, n, t, chain));
                         if (n > 1 && guard)
                             throw new AmbiguousTargetError(await this.describeAmbiguous(v, n, t, chain, within ? 'within' : 'guard'));
+                        // Not destructive by its label, but the same control in different rows or cards (Edit, Open, Select, a field per
+                        // row) is a different business entity each time: picking the first one can change the wrong record. Only then
+                        // is it refused; duplicates within one container (a responsive copy, a repeated link) keep the first match.
+                        // Costs one evaluation, and only when there are several matches.
+                        if (n > 1 && !within && !raw && (intent === 'click' || intent === 'fill') && (await this.distinctContainers(v)) > 1) {
+                            throw new AmbiguousTargetError(await this.describeAmbiguous(v, n, t, chain, 'rows'));
+                        }
                         if ((strict || guard) && !within && scopes.length > 1) {
                             // the same control in another frame is a second candidate, found by the same strategy (counted in parallel)
                             const others = scopes.filter((other) => other !== chain);
@@ -832,6 +899,18 @@ export class Session {
      * Stamps refs on the first matches and describes them compactly, so the caller can retry with an exact ref.
      * mode: strict (strict mode), guard (a destructive label without strict mode), within (still several inside the container).
      */
+    /** How many different record containers (rows, list items, articles, cards) hold the visible matches; 0 or 1 = one place. */
+    async distinctContainers(v) {
+        return v.evaluateAll((els, sel) => {
+            const boxes = new Set();
+            for (const el of els.slice(0, 50)) {
+                const b = el.closest(sel);
+                if (b)
+                    boxes.add(b);
+            }
+            return boxes.size;
+        }, ROWS).catch(() => 0);
+    }
     async describeAmbiguous(v, n, t, chain, mode = 'strict') {
         let items = [];
         try {
@@ -864,7 +943,7 @@ export class Session {
                         el.setAttribute('data-fq', ref);
                     }
                     const box = el.closest('li,tr,section,article,form,fieldset,[role=row],[role=listitem],.card');
-                    return { ref, role: el.getAttribute('role') || el.tagName.toLowerCase(), text: clean(el.innerText || el.getAttribute('aria-label') || el.value, 40), near: clean(box?.innerText, 60), hint: cssPath(el) };
+                    return { ref, role: el.getAttribute('role') || el.tagName.toLowerCase(), text: clean(el.innerText || el.getAttribute('aria-label') || (el.tagName === 'INPUT' && /^(button|submit|reset)$/i.test(el.getAttribute('type') || '') ? el.value : el.getAttribute('placeholder')), 40), near: clean(box?.innerText, 60), hint: cssPath(el) };
                 });
             }, this.refBase);
         }
@@ -877,6 +956,8 @@ export class Session {
         const more = n > items.length ? ` | … ${n - items.length} more` : '';
         if (mode === 'guard')
             return `Not executed: "${t}" matches ${n} elements and fastqa does not guess the target of a destructive action. Use within or a ref: ${list}${more}`;
+        if (mode === 'rows')
+            return `Not executed: "${t}" matches ${n} elements in different rows or cards, and fastqa does not guess which record to change. Use within or a ref: ${list}${more}`;
         if (mode === 'within')
             return `Not executed: "${t}" still matches ${n} elements inside the container. Use a narrower within or a ref: ${list}${more}`;
         return `"${t}" matches ${n} elements and strict mode will not pick one. Use a ref: ${list}${more}`;

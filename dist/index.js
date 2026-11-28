@@ -108,6 +108,7 @@ const StepSchema = z.object({
     timeout: z.number().optional().describe('ms, default 5000'),
     frame: z.string().optional().describe('only search inside this iframe (title, name, id or src fragment). Usually not needed: targets are searched in the page, shadow DOM and all iframes.'),
     within: z.string().optional().describe('only inside this container: ref, selector or text of its row/card ("Invoice 1001"). Never widened.'),
+    scope: z.enum(['action', 'batch']).optional().describe('expect_request only: "action" (default) judges the latest request of the latest action; "batch" passes on any matching request since the batch started.'),
 });
 server.registerTool('act', {
     description: 'Run MANY steps in ONE call (fill a whole form, submit, assert) — this is what makes fastqa fast. ' +
@@ -294,7 +295,7 @@ server.registerTool('flow', {
     inputSchema: {
         action: z.enum(['start', 'save', 'run', 'list', 'show', 'export']),
         name: z.string().optional(),
-        vars: z.record(z.string()).optional().describe('values for {{placeholders}} when running'),
+        vars: z.record(z.string(), z.string()).optional().describe('values for {{placeholders}} when running'),
         dataset: z.string().optional().describe('run: CSV file (or name in .fastqa/data/) — the flow runs once per row, columns fill {{placeholders}}'),
         mode: z.enum(['observe', 'strict']).optional().describe('strict: run fails on QA findings per config; export refuses steps it cannot export faithfully.'),
         workers: z.number().int().min(1).max(8).optional().describe('run: flows/rows in parallel, own context each'),

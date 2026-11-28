@@ -31,6 +31,29 @@ export const BODY_HASH_MAX = 8 * 1024 * 1024;
  * different files are not a double submit, and two large bodies are never the same only because their lengths are.
  * A request that carries an idempotency key is identified by that key ("idem:"): sending it again is a safe retry.
  */
+/** Suffixes under which every name is a different owner (a short list of the common ones; not the whole PSL). */
+const SHARED = /(^|\.)(github\.io|gitlab\.io|vercel\.app|netlify\.app|herokuapp\.com|pages\.dev|workers\.dev|web\.app|firebaseapp\.com|azurewebsites\.net|cloudfront\.net|amazonaws\.com|appspot\.com|onrender\.com|ngrok\.io|ngrok-free\.app|blogspot\.com)$/i;
+const MULTI = /^(co|com|net|org|gov|edu|ac|ne|or)\.[a-z]{2}$/i;
+const IP = /^(\d+\.){3}\d+$|^\[.*\]$/;
+function siteOf(host: string): string | undefined {
+  if (IP.test(host) || !host.includes('.')) return host; // an IP or a single label (localhost) is its own site
+  const labels = host.toLowerCase().split('.');
+  const m = SHARED.exec(host);
+  if (m) { const suffix = m[2].split('.').length; return labels.length > suffix ? labels.slice(-(suffix + 1)).join('.') : undefined; }
+  const two = labels.slice(-2).join('.');
+  return MULTI.test(two) ? (labels.length > 2 ? labels.slice(-3).join('.') : undefined) : two;
+}
+/** Two origins of the same site: same host (any port), or same registrable domain; http and https of it both count. */
+export function sameSite(a: string, b: string): boolean {
+  let ha = '', hb = '';
+  try { ha = new URL(a).hostname; hb = new URL(b).hostname; } catch { return false; }
+  if (!ha || !hb) return false;
+  if (ha === hb) return true;
+  if (IP.test(ha) || IP.test(hb)) return false;
+  const sa = siteOf(ha), sb = siteOf(hb);
+  return !!sa && sa === sb;
+}
+
 let unknownBodies = 0;
 export function bodyKeyOf(req: { method(): string; url(): string; headers(): Record<string, string>; postDataBuffer(): Buffer | null }): string {
   const h = createHash('sha1').update(req.method()).update(' ').update(req.url());
@@ -64,6 +87,7 @@ export class Observer {
   bodyReaders = 0;
   private capturedBytes = 0;
   readonly firstParty = new Set<string>();
+  private siblings = true;
   readonly stats = { requests: 0, tracked: 0, firstParty: 0, thirdParty: 0, bodiesCaptured: 0, bodiesSkipped: 0, consoleErrors: 0, pageErrors: 0 };
   readonly sinks: ObserverSink[] = [];
   /** a fingerprint of each submission (method, URL, body hash), never the body: kept out of the record and its exports */
@@ -103,12 +127,32 @@ export class Observer {
       describeAction: (a) => this.actions.describe(a),
     });
     for (const o of cfg.firstPartyOrigins) this.firstParty.add(o);
+    this.siblings = cfg.firstPartySiblings !== false;
   }
 
   now = () => performance.now() - this.t0;
 
   /** The origins the agent explicitly opened are first party; everything else is not flagged by default. */
-  noteFirstParty(url: string) { try { const o = new URL(url).origin; if (o !== 'null') this.firstParty.add(o); } catch { /* not a URL */ } }
+  noteFirstParty(url: string) { try { const o = new URL(url).origin; if (o !== 'null' && !this.firstParty.has(o)) { this.firstParty.add(o); this.siblingCache.clear(); } } catch { /* not a URL */ } }
+
+  /**
+   * First party: an origin that was opened or configured, or (unless quality.firstPartySiblings is false) a sibling of
+   * one: the same host on another port (a UI on :3000 calling an API on :8080), or another host of the same site
+   * (app.example.com calling api.example.com). A shared-hosting suffix (github.io, vercel.app, …) is not one site, and
+   * IP addresses only match themselves. Without this an API on its own subdomain was never judged at all.
+   */
+  private siblingCache = new Map<string, boolean>();
+  isFirstParty(origin: string): boolean {
+    if (this.firstParty.has(origin)) return true;
+    if (!this.siblings) return false;
+    const hit = this.siblingCache.get(origin);
+    if (hit !== undefined) return hit;
+    let yes = false;
+    for (const fo of this.firstParty) if (sameSite(origin, fo)) { yes = true; break; }
+    if (this.siblingCache.size > 500) this.siblingCache.clear();
+    this.siblingCache.set(origin, yes);
+    return yes;
+  }
 
   pageId(page: Page): string {
     let id = this.pageIds.get(page);
@@ -139,7 +183,7 @@ export class Observer {
     try { const u = new URL(rawUrl); origin = u.origin; pathname = u.pathname; } catch { return; }
     const resourceType = req.resourceType();
     const tracked = TRACKED.has(resourceType);
-    const firstParty = this.firstParty.has(origin);
+    const firstParty = this.isFirstParty(origin);
     let frame: Frame | null = null;
     try { frame = req.frame(); } catch { /* service worker or detached */ }
     const route = normalizePath(pathname.slice(0, 500), this.cfg.discovery.pathTemplates);

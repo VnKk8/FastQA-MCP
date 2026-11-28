@@ -2,6 +2,32 @@
 
 All notable changes to `fastqa-mcp`. Versions follow [semantic versioning](https://semver.org/).
 
+## 1.0.4 (unreleased)
+
+Fixes from the November 2026 technical review (FQA-01 … FQA-09), each verified against 1.0.3 and covered by a test that fails on 1.0.3 (`bench/review-findings.mjs`), plus three gaps found while verifying it.
+
+### Fixed
+
+- **FQA-03: typed values no longer leak into visual findings.** `evidence {view:"visual"}` named a field by its `value` when it had no visible text, so a typed password or one-time code appeared in an overlap or overflow finding. Fields are now named by their label, `aria-labelledby`, placeholder or name, collected safely in the page instead of relying on redaction later; only a button-like input's value (its label) is used. The ambiguity candidate list follows the same rule. The snapshot also shows `=•••` for fields that declare a one-time code or card data (`autocomplete`) or are named like a secret (`otp`, `pin`, `cvv`, `iban`, `token`, …), not only for `type=password`.
+- **FQA-06: `expect_request` judges the latest action.** It passed when any matching request since the batch started had the status, so `Save A → 200, Save B → 500, expect 2xx` passed. By default it now takes the requests the correlation attributed to the latest action (click, fill, goto, …), or unattributed ones that started after it, and the latest of them decides. `scope: "batch"` on the step keeps the 1.0.3 meaning. The exported spec judges the latest matching response.
+- **FQA-04: one label in several records is not guessed.** A click or fill whose label matches controls in different table rows, list items, articles or cards (Edit, Open, a field per row) is refused with the candidates and their rows, like a destructive label. Duplicates inside one record and outside rows keep the first match. More destructive labels in Bulgarian (плати, потвърди, изпрати, поръчай, анулирай, теглене, преведи, …), German, French, Spanish, Portuguese and Italian.
+- **FQA-02: permission verdicts no longer overstate the evidence.** Only `permissions.deniedStatuses` (403 by default) proves a denial. 401 (missing or expired session), 404 (missing or hidden resource) and 405 (wrong method) are inconclusive with an explanation unless configured; a redirect, or the 200 at the end of one (usually a login page), is inconclusive instead of an allowance.
+- **FQA-01: `browser.allowedOrigins` blocks instead of reporting afterwards.** A top-level or popup navigation to another origin is aborted before its document request is sent, through a request route that only sees other origins and is installed only when the option is set. The post-navigation check stays as a fallback. Not a network sandbox: iframes, workers and `fetch()` are not covered.
+- **FQA-05: an idempotency key is not proof of safety.** Repeated submissions with one `Idempotency-Key` are still not a `DUPLICATE-SUBMIT`, but are now reported as `KEYED-RETRY` (info): a possible safe retry, with the next check being that only one record or charge exists.
+
+### Added
+
+- **`dialog` step (FQA-07):** `{ "do": "dialog", "value": "accept" | "dismiss" | "accept:<prompt text>", "target": "<expected message>" }` arms the handling of the next native dialog. The following step fails when no dialog appears or its message does not match (it is then dismissed). Unarmed dialogs are still dismissed; the prompt answer never enters the evidence.
+- **First-party siblings:** an API on another port of the same host, or on another host of the same site (`api.example.com` for `app.example.com`), is first party and judged. Shared-hosting suffixes and IP addresses are never one site. `quality.firstPartySiblings: false` restores 1.0.3.
+- **`ENVELOPE-ERROR`:** a 2xx JSON response whose result envelope says it failed (`success`/`isSuccess`/`ok` false, `status: "error"`, `error`, `errors`, a non-zero `errorCode`; any key case, so the .NET shape counts) is a low-confidence lead. Needs payload capture, never reports the body's error text, and gives way to a `businessRules` entry for the endpoint. `quality.envelopeErrors: false` turns it off.
+- **`permissions.deniedStatuses`** in the config file.
+
+### Changed
+
+- **zod 4.** Fixes the high-severity advisory GHSA-mrhx-c7xc-m3w5 (`npm audit` is clean). The generated tool schemas no longer say `additionalProperties: false` for steps and add `propertyNames` to records; neither rejects an input 0.3.2 accepted (`bench/compat.mjs` checks this).
+- **Docs (FQA-08, FQA-09):** parallel workers isolate browser state, not backend data, with what to do before running mutating flows in parallel; the performance table states that one fixture and one journey do not show general speed.
+- Behaviour changes to note when upgrading: an ambiguous Edit/Open across rows now fails instead of clicking the first; `expect_request` after two actions judges the second; `expect_permission` denied on 401/404/405 is inconclusive until `permissions.deniedStatuses` says otherwise.
+
 ## 1.0.3 (2026-11-28)
 
 ### Added
