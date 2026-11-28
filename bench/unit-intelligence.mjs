@@ -233,10 +233,21 @@ test('form ideas: boundaries, types, files, no values for secrets, bounded, noth
 
 // ---------------------------------------------------------------------------------------------------- permissions
 test('permissions: the backend answer, the UI alone and "not tested" stay apart; 200 is not proof, 403 can be a pass', () => {
-  assert.deepEqual([judgeBackend('denied', [403]).verdict, judgeBackend('denied', [401]).verdict], ['pass', 'pass']);
+  assert.equal(judgeBackend('denied', [403]).verdict, 'pass');
+  // FQA-02: 401 / 404 / 405 and redirects are inconclusive unless configured as this backend's denial
+  assert.equal(judgeBackend('denied', [401]).verdict, 'inconclusive');
+  assert.match(judgeBackend('denied', [401]).note, /missing or expired session/);
+  assert.equal(judgeBackend('denied', [401], [401, 403]).verdict, 'pass');
+  assert.equal(judgeBackend('denied', [405]).verdict, 'inconclusive');
+  assert.equal(judgeBackend('denied', [404], [403, 404]).verdict, 'pass');
+  assert.equal(judgeBackend('allowed', [302]).verdict, 'inconclusive', 'a redirect is not an allowance');
+  assert.equal(judgeBackend('allowed', [{ status: 200, redirected: true }]).verdict, 'inconclusive', 'the login page after a redirect is not an allowance');
+  assert.match(judgeBackend('allowed', [{ status: 200, redirected: true }]).observed, /after a redirect/);
+  assert.equal(judgeBackend('allowed', [404]).verdict, 'inconclusive');
   assert.equal(judgeBackend('denied', [201]).verdict, 'mismatch');
   assert.match(judgeBackend('denied', [200]).note, /whether data changed is not verified/);
-  assert.equal(judgeBackend('denied', [404]).verdict, 'pass');
+  assert.equal(judgeBackend('denied', [404]).verdict, 'inconclusive', 'a 404 may be a resource that does not exist');
+  assert.match(judgeBackend('denied', [404]).note, /does not exist as well as that it is hidden/);
   assert.equal(judgeBackend('denied', [422]).verdict, 'inconclusive', 'validation says nothing about the permission');
   assert.equal(judgeBackend('denied', [500]).verdict, 'inconclusive');
   assert.equal(judgeBackend('allowed', [201]).verdict, 'pass');
@@ -315,4 +326,34 @@ test('identity from a snapshot line; destructive labels are recognised, ordinary
   assert.equal(identityOf('h1 "Title"'), undefined);
   for (const t of ['Delete', 'Remove item', 'Pay now', 'Place order', 'Submit', 'Cancel subscription', 'Löschen']) assert.ok(DESTRUCTIVE.test(t), t);
   for (const t of ['Details', 'Add to cart', 'Next', 'Deleted items', 'Cancel']) assert.ok(!DESTRUCTIVE.test(t), t);
+});
+
+// ---------------------------------------------------------------------------------------------------- 1.0.4 review
+test('first-party siblings: same host on another port, same registrable domain; never shared hosting or other IPs', async () => {
+  const { sameSite } = await import('../dist/observation/observer.js');
+  assert.ok(sameSite('http://127.0.0.1:3000', 'http://127.0.0.1:8080'), 'same host, other port');
+  assert.ok(sameSite('https://app.example.com', 'https://api.example.com'));
+  assert.ok(sameSite('https://pe.qa.example.com', 'https://example.com'));
+  assert.ok(sameSite('https://shop.example.co.uk', 'https://api.example.co.uk'));
+  assert.ok(!sameSite('https://a.example.co.uk', 'https://b.other.co.uk'), 'co.uk is a public suffix');
+  assert.ok(!sameSite('https://me.github.io', 'https://you.github.io'), 'shared hosting: different owners');
+  assert.ok(sameSite('https://api.me.github.io', 'https://me.github.io'));
+  assert.ok(!sameSite('http://127.0.0.1:3000', 'http://127.0.0.2:3000'));
+  assert.ok(!sameSite('http://localhost:3000', 'http://127.0.0.1:3000'));
+  assert.ok(!sameSite('https://example.com', 'https://example.org'));
+});
+
+test('envelope failures: common shapes, any key case, never the error text', async () => {
+  const { envelopeFailure } = await import('../dist/quality/engine.js');
+  assert.equal(envelopeFailure({ success: false })?.key, 'success');
+  assert.equal(envelopeFailure({ IsSuccess: false, Data: null })?.key, 'issuccess', '.NET shape');
+  assert.equal(envelopeFailure({ ok: false })?.key, 'ok');
+  assert.equal(envelopeFailure({ status: 'error' })?.key, 'status');
+  assert.equal(envelopeFailure({ Errors: [{ Code: 'X' }] })?.key, 'errors');
+  assert.equal(envelopeFailure({ errorCode: 4012 })?.text, 'errorcode 4012');
+  const e = envelopeFailure({ error: 'card 4111 declined for Ivan' });
+  assert.equal(e?.key, 'error'); assert.ok(!/4111|Ivan/.test(e.text), 'the body text is never reported');
+  for (const fine of [{ success: true }, { error: null }, { errors: [] }, { errorCode: 0 }, { ErrorCode: 'None' }, { status: 'ok' }, [], 'x', null, { data: { success: false } }]) {
+    assert.equal(envelopeFailure(fine), undefined, JSON.stringify(fine));
+  }
 });

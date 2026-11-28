@@ -115,6 +115,21 @@ export function duplicates(e: ActionEffects): RequestRecord[][] {
   return [...groups.values()].filter((g) => g.length > 1 && !g.some(failed));
 }
 
+/**
+ * Groups of submissions of one action that carried the same idempotency key. The key says the client meant a retry;
+ * it does not show that the backend honours it, so this is a possible safe retry to verify, never proof of safety.
+ */
+export function keyedRetries(e: ActionEffects): RequestRecord[][] {
+  const groups = new Map<string, RequestRecord[]>();
+  for (const r of e.requests) {
+    if (!submission(r)) continue;
+    const key = e.bodyKey(r);
+    if (!key.startsWith('idem:')) continue;
+    groups.set(`${r.method} ${key}`, [...(groups.get(`${r.method} ${key}`) ?? []), r]);
+  }
+  return [...groups.values()].filter((g) => g.length > 1 && !g.some(failed));
+}
+
 // ---------------------------------------------------------------------------------------------------- feedback tone
 
 export interface Told {

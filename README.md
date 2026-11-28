@@ -291,7 +291,7 @@ One small fixture on one machine; the end-to-end row assumes 3 s per model turn 
 ## Credentials, safety and limits
 
 - Never put real passwords in prompts or committed configs: use `{{password}}` and set `FASTQA_VAR_password` from a local or CI secret store (`export FASTQA_VAR_password='…'`, or `setx` on Windows).
-- Run only against applications you are allowed to test, with test accounts, and do not let an agent repeat purchases or other irreversible operations unattended. `browser.allowedOrigins` stops a batch that leaves your test site (checked after the navigation, not a network sandbox).
+- Run only against applications you are allowed to test, with test accounts, and do not let an agent repeat purchases or other irreversible operations unattended. `browser.allowedOrigins` blocks a navigation that would leave your test site before its request is sent, and stops the batch (top-level and popup navigations only: not a network sandbox).
 - Chromium only; closed shadow roots are unreachable; one page is active at a time; one MCP server drives one interactive session (run one server per parallel worker). Feedback rules read a message's meaning from its classes and a short word list and stay silent on pages they cannot read. Accessibility checks do not replace a manual audit. All limits: [reference](docs/REFERENCE.md#limitations).
 
 ## Develop and contribute

@@ -13,6 +13,8 @@ const pos = z.number().int().positive();
 const QualitySchema = z.object({
   mode: z.enum(['observe', 'strict', 'discovery', 'debug', 'off']).optional(),
   firstPartyOrigins: z.array(origin).optional(),
+  firstPartySiblings: z.boolean().optional(),
+  envelopeErrors: z.boolean().optional(),
   expectedResponses: z.array(z.object({
     method, path: z.string().min(1), statuses: z.array(z.number().int().min(100).max(599)).min(1),
     scope: z.string().min(1), reason: z.string().min(1),
@@ -70,6 +72,9 @@ const ConfigSchema = z.object({
   }).strict().optional(),
   browser: z.object({ ignoreHTTPSErrors: z.boolean().optional(), allowedOrigins: z.array(origin).optional() }).strict().optional(),
   mcp: z.object({ structuredContent: z.boolean().optional() }).strict().optional(),
+  // which backend statuses prove a denial for expect_permission; 403 by default. Add 401, 404 or 405 only when this
+  // backend is known to answer a role denial that way (a 404 for a resource that exists, a 401 for a valid session).
+  permissions: z.object({ deniedStatuses: z.array(z.union([z.literal(401), z.literal(403), z.literal(404), z.literal(405)])).min(1).optional() }).strict().optional(),
 }).strict();
 
 export type RawConfig = z.infer<typeof ConfigSchema>;
@@ -82,6 +87,8 @@ export interface Config {
   mode: Mode;
   enforce: boolean;
   firstPartyOrigins: string[];
+  firstPartySiblings: boolean;
+  envelopeErrors: boolean;
   expectedResponses: NonNullable<Q['expectedResponses']>;
   suppressions: NonNullable<Q['suppressions']>;
   businessRules: NonNullable<Q['businessRules']>;
@@ -100,6 +107,7 @@ export interface Config {
   artifacts: { enabled: boolean; maxBytesPerRun: number; retentionDays: number; maxRuns: number; screenshots: boolean; maxScreenshots: number; maxReports: number };
   browser: { ignoreHTTPSErrors: boolean; allowedOrigins: string[]; legacyTls: boolean };
   structuredContent: boolean;
+  permissions: { deniedStatuses: number[] };
 }
 
 export class ConfigError extends Error {}
@@ -138,6 +146,8 @@ export function parseConfig(raw: unknown, opts: { mode?: Mode; fileExists?: bool
   return {
     source: opts.source, warnings, mode, enforce: mode === 'strict',
     firstPartyOrigins: q.firstPartyOrigins ?? [],
+    firstPartySiblings: q.firstPartySiblings ?? true,
+    envelopeErrors: q.envelopeErrors ?? true,
     expectedResponses: q.expectedResponses ?? [], suppressions: q.suppressions ?? [], businessRules: q.businessRules ?? [],
     failOnSeverity: q.failOnSeverity ?? 'high',
     finalizeTimeoutMs: q.finalizeTimeoutMs ?? 3000,
@@ -161,6 +171,7 @@ export function parseConfig(raw: unknown, opts: { mode?: Mode; fileExists?: bool
     },
     browser: { ignoreHTTPSErrors, allowedOrigins: c.browser?.allowedOrigins ?? [], legacyTls: legacyTls && ignoreHTTPSErrors },
     structuredContent: c.mcp?.structuredContent ?? truthy(env.FASTQA_STRUCTURED),
+    permissions: { deniedStatuses: c.permissions?.deniedStatuses ?? [403] },
   };
 }
 
